@@ -1,6 +1,7 @@
 package org.thepacket.meshcore.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,13 +28,15 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 
 /**
- * Full-screen map where the user taps to choose a position. Returns the picked
- * lat/lon via [onPick]. Read-only tiles; nothing is sent until the caller saves.
+ * Full-screen map where the user taps to choose a position. The controls are drawn
+ * as an overlay on top of the map (a Box) so they always sit above it. Read-only
+ * tiles; nothing is sent until the caller saves.
  */
 @Composable
 fun MapPickerDialog(
@@ -48,10 +51,42 @@ fun MapPickerDialog(
         )
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+        Box(Modifier.fillMaxSize()) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    Configuration.getInstance().userAgentValue = ctx.packageName
+                    MapView(ctx).apply {
+                        setTileSource(TileSourceFactory.MAPNIK)
+                        setMultiTouchControls(true)
+                        zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER) // no +/-
+                        controller.setZoom(if (picked != null) 13.0 else 4.0)
+                        picked?.let { controller.setCenter(it) }
+                        val marker = Marker(this).apply { setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM) }
+                        picked?.let { marker.position = it; overlays.add(marker) }
+                        val recv = object : MapEventsReceiver {
+                            override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
+                                picked = p
+                                marker.position = p
+                                if (!overlays.contains(marker)) overlays.add(marker)
+                                invalidate()
+                                return true
+                            }
+                            override fun longPressHelper(p: GeoPoint) = false
+                        }
+                        overlays.add(0, MapEventsOverlay(recv))
+                    }
+                },
+                onRelease = { it.onDetach() },
+            )
+
+            // Control bar overlaid on top of the map.
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+            ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp),
+                    Modifier.fillMaxWidth().systemBarsPadding().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -69,32 +104,6 @@ fun MapPickerDialog(
                         onClick = { picked?.let { onPick(it.latitude, it.longitude) } },
                     ) { Text("Save") }
                 }
-                AndroidView(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    factory = { ctx ->
-                        Configuration.getInstance().userAgentValue = ctx.packageName
-                        MapView(ctx).apply {
-                            setTileSource(TileSourceFactory.MAPNIK)
-                            setMultiTouchControls(true)
-                            controller.setZoom(if (picked != null) 13.0 else 4.0)
-                            picked?.let { controller.setCenter(it) }
-                            val marker = Marker(this).apply { setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM) }
-                            picked?.let { marker.position = it; overlays.add(marker) }
-                            val recv = object : MapEventsReceiver {
-                                override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
-                                    picked = p
-                                    marker.position = p
-                                    if (!overlays.contains(marker)) overlays.add(marker)
-                                    invalidate()
-                                    return true
-                                }
-                                override fun longPressHelper(p: GeoPoint) = false
-                            }
-                            overlays.add(0, MapEventsOverlay(recv))
-                        }
-                    },
-                    onRelease = { it.onDetach() },
-                )
             }
         }
     }
