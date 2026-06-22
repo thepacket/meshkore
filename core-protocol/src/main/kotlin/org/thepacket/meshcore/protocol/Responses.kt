@@ -129,9 +129,11 @@ object FrameDecoder {
         return BattAndStorage(mv, used, total)
     }
 
-    // RESP_CODE_SELF_INFO: type(1) txPower(1) maxTxPower(1) pubKey(32)
-    // advLat(i32) advLon(i32) freq(u32) bw(u32) sf(1) cr(1) name(rest, cstr)
-    // TODO: confirm field order/widths against the firmware SELF_INFO writer.
+    // RESP_CODE_SELF_INFO (confirmed against firmware MyMesh.cpp writer):
+    //   type(1) txPower(1) maxTxPower(1) pubKey(32) advLat(i32) advLon(i32)
+    //   multiAcks(1) advertLocPolicy(1) telemetryModes(1) manualAddContacts(1)
+    //   freq(u32, kHz) bw(u32, Hz) sf(1) cr(1) name(rest)
+    // telemetryModes byte = (env<<4) | (loc<<2) | base.
     private fun parseSelfInfo(r: FrameReader): SelfInfo {
         val type = r.u8()
         val tx = r.u8()
@@ -139,12 +141,25 @@ object FrameDecoder {
         val pub = r.bytes(32)
         val lat = r.i32()
         val lon = r.i32()
+        val multiAcks = r.u8()
+        val advertLocPolicy = r.u8()
+        val telem = r.u8()
+        val manualAdd = r.u8()
         val freq = r.u32()
         val bw = r.u32()
         val sf = r.u8()
         val cr = r.u8()
         val name = r.restAsString()
-        return SelfInfo(type, tx, maxTx, pub, lat, lon, freq, bw, sf, cr, name)
+        return SelfInfo(
+            type = type, txPower = tx, maxTxPower = maxTx, publicKey = pub,
+            advLat = lat, advLon = lon,
+            multiAcks = multiAcks, advertLocPolicy = advertLocPolicy,
+            telemetryModeBase = telem and 0x03,
+            telemetryModeLoc = (telem shr 2) and 0x03,
+            telemetryModeEnv = (telem shr 4) and 0x03,
+            manualAddContacts = manualAdd,
+            radioFreqKhz = freq, radioBwHz = bw, radioSf = sf, radioCr = cr, name = name,
+        )
     }
 
     // RESP_CODE_CONTACT_MSG_RECV(_V3): pubKeyPrefix(6) pathLen(1) txtType(1)

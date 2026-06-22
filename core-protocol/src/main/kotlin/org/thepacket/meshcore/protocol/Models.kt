@@ -36,7 +36,11 @@ data class Contact(
     override fun hashCode() = publicKey.contentHashCode()
 }
 
-/** Reply to CMD_APP_START (RESP_CODE_SELF_INFO): this device's own identity/config. */
+/**
+ * Reply to CMD_APP_START (RESP_CODE_SELF_INFO): this device's own identity/config.
+ * Field order matches the firmware writer (MyMesh.cpp). Note the frame's mixed units:
+ * frequency is in kHz (MHz×1000), bandwidth is in Hz (kHz×1000).
+ */
 data class SelfInfo(
     val type: Int,
     val txPower: Int,
@@ -44,12 +48,21 @@ data class SelfInfo(
     val publicKey: ByteArray,
     val advLat: Int,
     val advLon: Int,
+    val multiAcks: Int,
+    val advertLocPolicy: Int,
+    val telemetryModeBase: Int,
+    val telemetryModeLoc: Int,
+    val telemetryModeEnv: Int,
+    val manualAddContacts: Int,
     val radioFreqKhz: Long,
-    val radioBwKhz: Long,
+    val radioBwHz: Long,
     val radioSf: Int,
     val radioCr: Int,
     val name: String,
 ) {
+    val freqMhz: Double get() = radioFreqKhz / 1000.0
+    val bwKhz: Double get() = radioBwHz / 1000.0
+
     override fun equals(other: Any?) = other is SelfInfo && publicKey.contentEquals(other.publicKey)
     override fun hashCode() = publicKey.contentHashCode()
 }

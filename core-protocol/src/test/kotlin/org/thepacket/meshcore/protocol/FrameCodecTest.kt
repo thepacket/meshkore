@@ -72,6 +72,41 @@ class FrameCodecTest {
         assertEquals(-73.0, c.lonDegrees!!, 1e-9)
     }
 
+    @Test fun decodeSelfInfo() {
+        // Build a RESP_CODE_SELF_INFO frame exactly as the firmware writer does.
+        val pub = ByteArray(32) { (it + 1).toByte() }
+        val telem = (2 shl 4) or (1 shl 2) or 3 // env=2, loc=1, base=3
+        val frame = FrameWriter()
+            .u8(Resp.SELF_INFO)
+            .u8(ContactType.CHAT)   // adv type
+            .u8(22)                 // tx power
+            .u8(22)                 // max tx power
+            .bytes(pub)
+            .i32(45_000_000)        // adv lat
+            .i32(-73_000_000)       // adv lon
+            .u8(0).u8(0).u8(telem).u8(1) // multiAcks, advertLocPolicy, telemetryModes, manualAdd
+            .u32(910_525)           // freq kHz  -> 910.525 MHz
+            .u32(250_000)           // bw Hz      -> 250 kHz
+            .u8(10)                 // sf
+            .u8(5)                  // cr
+            .str("LostPacket4")
+            .build()
+
+        val decoded = FrameDecoder.decode(frame)
+        assertTrue(decoded is Incoming.Self)
+        val s = (decoded as Incoming.Self).info
+        assertEquals("LostPacket4", s.name)
+        assertEquals(22, s.txPower)
+        assertEquals(910.525, s.freqMhz, 1e-9)
+        assertEquals(250.0, s.bwKhz, 1e-9)
+        assertEquals(10, s.radioSf)
+        assertEquals(5, s.radioCr)
+        assertEquals(1, s.manualAddContacts)
+        assertEquals(3, s.telemetryModeBase)
+        assertEquals(1, s.telemetryModeLoc)
+        assertEquals(2, s.telemetryModeEnv)
+    }
+
     @Test fun decodeSentAndConfirm() {
         val sent = FrameDecoder.decode(FrameWriter().u8(Resp.SENT).u8(0).u32(0xDEADBEEFL).build())
         assertTrue(sent is Incoming.Sent)

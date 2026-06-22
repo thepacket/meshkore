@@ -94,8 +94,8 @@ private fun ConnectedCard(self: SelfInfo, onDisconnect: () -> Unit) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(self.name.ifBlank { "(unnamed node)" }, style = MaterialTheme.typography.headlineSmall)
             Field("Public key", self.publicKey.copyOf(8).toHex() + "…")
-            Field("Frequency", "${self.radioFreqKhz / 1000.0} MHz")
-            Field("Bandwidth", "${self.radioBwKhz} kHz")
+            Field("Frequency", "${self.freqMhz} MHz")
+            Field("Bandwidth", "${self.bwKhz} kHz")
             Field("Spreading factor", "SF${self.radioSf}")
             Field("Coding rate", "4/${self.radioCr}")
             Field("TX power", "${self.txPower} dBm (max ${self.maxTxPower})")
