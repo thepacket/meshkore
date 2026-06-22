@@ -17,15 +17,10 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,29 +32,19 @@ import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
 import kotlin.math.abs
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(
+fun HomeContent(
     self: SelfInfo?,
     channels: List<org.thepacket.meshcore.app.ChannelEntry>,
     contacts: List<Contact>,
     onOpenConversation: (id: String, title: String) -> Unit,
-    onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(self?.name?.ifBlank { "MeshCore" } ?: "MeshCore") },
-                actions = { TextButton(onClick = onDisconnect) { Text("Disconnect") } },
-                colors = TopAppBarDefaults.topAppBarColors(),
-            )
-        },
-    ) { pad ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(pad),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+    LazyColumn(
+        modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
             self?.let {
                 item { DeviceHeader(it) }
             }
@@ -95,7 +80,6 @@ fun HomeScreen(
             }
         }
     }
-}
 
 @Composable
 private fun DeviceHeader(self: SelfInfo) {

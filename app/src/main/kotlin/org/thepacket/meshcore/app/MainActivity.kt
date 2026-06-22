@@ -13,7 +13,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.thepacket.meshcore.app.ui.ConnectScreen
 import org.thepacket.meshcore.app.ui.ConversationScreen
-import org.thepacket.meshcore.app.ui.HomeScreen
+import org.thepacket.meshcore.app.ui.MainScaffold
 import org.thepacket.meshcore.app.ui.MeshCoreTheme
 
 class MainActivity : ComponentActivity() {
@@ -37,6 +37,11 @@ class MainActivity : ComponentActivity() {
             val channels by vm.session.channels.collectAsStateWithLifecycle()
             val contacts by vm.session.contacts.collectAsStateWithLifecycle()
             val messages by vm.session.messages.collectAsStateWithLifecycle()
+            val packets by vm.session.packets.collectAsStateWithLifecycle()
+            val radio by vm.session.radioStats.collectAsStateWithLifecycle()
+            val core by vm.session.coreStats.collectAsStateWithLifecycle()
+            val packetStats by vm.session.packetStats.collectAsStateWithLifecycle()
+            val noise by vm.session.noiseHistory.collectAsStateWithLifecycle()
 
             val permLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
@@ -51,12 +56,19 @@ class MainActivity : ComponentActivity() {
                         },
                         onConnect = vm::connect,
                     )
-                    is Screen.Home -> HomeScreen(
+                    is Screen.Main -> MainScaffold(
+                        tab = state.tab,
+                        onTab = vm::setTab,
+                        onDisconnect = vm::disconnect,
                         self = self,
                         channels = channels,
                         contacts = contacts,
+                        packets = packets,
+                        radio = radio,
+                        core = core,
+                        packetStats = packetStats,
+                        noiseHistory = noise,
                         onOpenConversation = vm::openConversation,
-                        onDisconnect = vm::disconnect,
                     )
                     is Screen.Conversation -> ConversationScreen(
                         title = screen.title,

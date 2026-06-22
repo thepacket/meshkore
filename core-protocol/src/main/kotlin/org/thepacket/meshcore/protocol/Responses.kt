@@ -54,6 +54,13 @@ sealed interface Incoming {
     data class Trace(val result: TraceResult) : Incoming
     data class RxPacket(val log: RxLog) : Incoming
 
+    // ---- stats (replies to CMD_GET_STATS) ----
+    data class CoreStatsResp(val stats: CoreStats) : Incoming
+    data class RadioStatsResp(val stats: RadioStats) : Incoming
+    data class PacketStatsResp(val stats: PacketStats) : Incoming
+    /** A RESP_CODE_STATS with an unrecognised sub-type. */
+    data class UnknownStats(val subType: Int) : Incoming
+
     /** Any frame not (yet) structurally decoded. [code] is the leading byte. */
     data class Raw(val code: Int, val payload: ByteArray) : Incoming {
         override fun equals(other: Any?) = other is Raw && code == other.code && payload.contentEquals(other.payload)
@@ -81,6 +88,7 @@ object FrameDecoder {
                 Resp.CURR_TIME -> Incoming.DeviceTime(r.u32())
                 Resp.NO_MORE_MESSAGES -> Incoming.NoMoreMessages
                 Resp.BATT_AND_STORAGE -> Incoming.Battery(parseBattery(r))
+                Resp.STATS -> parseStats(r)
                 Resp.CONTACT_MSG_RECV, Resp.CONTACT_MSG_RECV_V3 ->
                     Incoming.Message(parseMessage(r, channel = false, v3 = code == Resp.CONTACT_MSG_RECV_V3))
                 Resp.CHANNEL_MSG_RECV, Resp.CHANNEL_MSG_RECV_V3 ->
@@ -240,11 +248,40 @@ object FrameDecoder {
         return TraceResult(tag, hops, finalSnr)
     }
 
-    // PUSH_CODE_LOG_RX_DATA: snrQ(i8) rssi(i8) payloadType(1) raw(rest).
+    // PUSH_CODE_LOG_RX_DATA: snrQ(i8) rssi(i8) raw(rest). Payload/route type is in raw[0].
     private fun parseRxLog(r: FrameReader): RxLog {
         val snr = r.i8()
         val rssi = r.i8()
-        val type = if (r.remaining > 0) r.u8() else 0
-        return RxLog(snr, rssi, type, r.rest())
+        return RxLog(snr, rssi, r.rest())
+    }
+
+    // RESP_CODE_STATS: subType(1) then sub-type-specific fields (CMD_GET_STATS handler).
+    private fun parseStats(r: FrameReader): Incoming = when (val sub = r.u8()) {
+        StatsType.CORE -> Incoming.CoreStatsResp(
+            CoreStats(
+                batteryMilliVolts = r.u16(),
+                uptimeSecs = r.u32(),
+                errFlags = r.u16(),
+                txQueueLen = r.u8(),
+            )
+        )
+        StatsType.RADIO -> Incoming.RadioStatsResp(
+            RadioStats(
+                noiseFloor = r.i16(),
+                lastRssi = r.i8(),
+                lastSnrQ = r.i8(),
+                txAirtimeSecs = r.u32(),
+                rxAirtimeSecs = r.u32(),
+            )
+        )
+        StatsType.PACKETS -> Incoming.PacketStatsResp(
+            PacketStats(
+                recv = r.u32(), sent = r.u32(),
+                sentFlood = r.u32(), sentDirect = r.u32(),
+                recvFlood = r.u32(), recvDirect = r.u32(),
+                recvErrors = r.u32(),
+            )
+        )
+        else -> Incoming.UnknownStats(sub)
     }
 }

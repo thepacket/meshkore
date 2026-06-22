@@ -17,17 +17,21 @@ import org.thepacket.meshcore.ble.ScannedDevice
 /** Which screen the UI is showing. */
 sealed interface Screen {
     data object Connect : Screen
-    data object Home : Screen
+    data object Main : Screen
     data class Conversation(val conversationId: String, val title: String) : Screen
 }
 
-/** Connection / scanning state (chat state lives in [MeshSession]). */
+/** Bottom-nav tabs within the connected (Main) screen. */
+enum class MainTab { Chats, Packets, Stats }
+
+/** Connection / scanning state (chat + instrumentation state live in [MeshSession]). */
 data class UiState(
     val scanning: Boolean = false,
     val devices: List<ScannedDevice> = emptyList(),
     val linkState: LinkState = LinkState.Disconnected,
     val error: String? = null,
     val screen: Screen = Screen.Connect,
+    val tab: MainTab = MainTab.Chats,
 )
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
@@ -46,7 +50,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             link.state.collect { s ->
                 _ui.update { st ->
                     val screen = when {
-                        s == LinkState.Connected && st.screen is Screen.Connect -> Screen.Home
+                        s == LinkState.Connected && st.screen is Screen.Connect -> Screen.Main
                         s == LinkState.Disconnected || s == LinkState.Failed -> Screen.Connect
                         else -> st.screen
                     }
@@ -110,8 +114,10 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ---- navigation ----
+    fun setTab(tab: MainTab) = _ui.update { it.copy(tab = tab) }
+
     fun openConversation(id: String, title: String) =
         _ui.update { it.copy(screen = Screen.Conversation(id, title)) }
 
-    fun backToHome() = _ui.update { it.copy(screen = Screen.Home) }
+    fun backToHome() = _ui.update { it.copy(screen = Screen.Main) }
 }

@@ -212,6 +212,58 @@ class FrameCodecTest {
         assertArrayEquals(pub, (decoded as Incoming.AdvertHeard).publicKey)
     }
 
+    @Test fun decodeRxLogDerivesTypeFromHeader() {
+        // header byte: route=DIRECT(2), payloadType=ADVERT(4) -> (4<<2)|2 = 0x12
+        val header = (PayloadType.ADVERT shl 2) or RouteType.DIRECT
+        val raw = byteArrayOf(header.toByte(), 0xDE.toByte(), 0xAD.toByte())
+        val frame = FrameWriter().u8(Push.LOG_RX_DATA).u8(40).u8(-110).bytes(raw).build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.RxPacket)
+        val log = (d as Incoming.RxPacket).log
+        assertEquals(10.0, log.snrDb, 1e-9)
+        assertEquals(-110, log.rssi)
+        assertEquals(PayloadType.ADVERT, log.payloadType)
+        assertEquals("ADVERT", log.typeName)
+        assertEquals("direct", log.routeName)
+        assertEquals(3, log.length)
+    }
+
+    @Test fun decodeRadioStatsIncludingNegativeNoise() {
+        val frame = FrameWriter()
+            .u8(Resp.STATS)
+            .u8(StatsType.RADIO)
+            .u16(0xFF88)      // -120 as int16 little-endian
+            .u8(-115)      // last rssi
+            .u8(48)           // last snr *4 = 12 dB
+            .u32(3600)        // tx airtime
+            .u32(7200)        // rx airtime
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.RadioStatsResp)
+        val s = (d as Incoming.RadioStatsResp).stats
+        assertEquals(-120, s.noiseFloor)
+        assertEquals(-115, s.lastRssi)
+        assertEquals(12.0, s.lastSnrDb, 1e-9)
+        assertEquals(3600L, s.txAirtimeSecs)
+    }
+
+    @Test fun decodePacketStats() {
+        val frame = FrameWriter()
+            .u8(Resp.STATS).u8(StatsType.PACKETS)
+            .u32(100).u32(50).u32(10).u32(40).u32(60).u32(40).u32(2)
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.PacketStatsResp)
+        val s = (d as Incoming.PacketStatsResp).stats
+        assertEquals(100L, s.recv)
+        assertEquals(2L, s.recvErrors)
+    }
+
+    @Test fun getStatsRequestShape() {
+        assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
+            Requests.getStats(StatsType.RADIO))
+    }
+
     @Test fun unknownCodeBecomesRawNotCrash() {
         val decoded = FrameDecoder.decode(byteArrayOf(0x7F, 1, 2, 3))
         assertTrue(decoded is Incoming.Raw)

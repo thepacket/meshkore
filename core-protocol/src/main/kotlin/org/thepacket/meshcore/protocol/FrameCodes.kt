@@ -134,5 +134,53 @@ object TxtType {
     const val SIGNED_PLAIN = 2
 }
 
+/** Sub-types for CMD_GET_STATS / RESP_CODE_STATS. */
+object StatsType {
+    const val CORE = 0
+    const val RADIO = 1
+    const val PACKETS = 2
+}
+
+/**
+ * Packet payload types (Packet.h). The first byte of a raw packet is the header:
+ * route = h & 0x03, payloadType = (h >> 2) & 0x0F, version = (h >> 6) & 0x03.
+ */
+object PayloadType {
+    const val REQ = 0x00
+    const val RESPONSE = 0x01
+    const val TXT_MSG = 0x02
+    const val ACK = 0x03
+    const val ADVERT = 0x04
+    const val GRP_TXT = 0x05
+    const val GRP_DATA = 0x06
+    const val ANON_REQ = 0x07
+    const val PATH = 0x08
+    const val TRACE = 0x09
+    const val MULTIPART = 0x0A
+    const val CONTROL = 0x0B
+    const val RAW_CUSTOM = 0x0F
+
+    fun name(type: Int): String = when (type) {
+        REQ -> "REQ"; RESPONSE -> "RESP"; TXT_MSG -> "TXT"; ACK -> "ACK"; ADVERT -> "ADVERT"
+        GRP_TXT -> "GRP_TXT"; GRP_DATA -> "GRP_DATA"; ANON_REQ -> "ANON_REQ"; PATH -> "PATH"
+        TRACE -> "TRACE"; MULTIPART -> "MULTIPART"; CONTROL -> "CONTROL"; RAW_CUSTOM -> "RAW"
+        else -> "0x%02X".format(type)
+    }
+}
+
+/** Packet route types (low 2 bits of the header). */
+object RouteType {
+    const val TRANSPORT_FLOOD = 0
+    const val FLOOD = 1
+    const val DIRECT = 2
+    const val TRANSPORT_DIRECT = 3
+
+    fun name(route: Int): String = when (route) {
+        FLOOD, TRANSPORT_FLOOD -> "flood"
+        DIRECT, TRANSPORT_DIRECT -> "direct"
+        else -> "?"
+    }
+}
+
 /** A code is a push (rather than a synchronous reply) iff its high bit is set. */
 fun isPush(code: Int): Boolean = (code and 0x80) != 0

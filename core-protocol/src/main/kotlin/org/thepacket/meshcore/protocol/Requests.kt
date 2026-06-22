@@ -104,6 +104,9 @@ object Requests {
 
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
+    /** Request a stats blob (reply RESP_CODE_STATS). See [StatsType]. */
+    fun getStats(type: Int): ByteArray = FrameWriter().u8(Cmd.GET_STATS).u8(type).build()
+
     /**
      * Set LoRa radio parameters. Layout (confirm units against MyMesh.cpp):
      * [cmd, freq(u32 kHz), bw(u32 kHz), sf(u8), cr(u8)].

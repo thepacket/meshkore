@@ -2,6 +2,8 @@ package org.thepacket.meshcore.app
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -9,9 +11,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.thepacket.meshcore.ble.MeshCoreLink
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.Incoming
+import org.thepacket.meshcore.protocol.PacketStats
+import org.thepacket.meshcore.protocol.RadioStats
 import org.thepacket.meshcore.protocol.Requests
+import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.SelfInfo
+import org.thepacket.meshcore.protocol.StatsType
 import java.util.ArrayDeque
 
 /**
@@ -27,6 +34,8 @@ class MeshSession(
 ) {
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
+        const val MAX_PACKETS = 200 // cap the live packet feed
+        const val NOISE_HISTORY = 120 // noise-floor samples retained for the graph
         const val TAG = "MeshSession"
     }
 
@@ -42,6 +51,26 @@ class MeshSession(
     /** conversationId -> messages (oldest first). */
     private val _messages = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
     val messages: StateFlow<Map<String, List<ChatMessage>>> = _messages.asStateFlow()
+
+    // ---- instrumentation (P2) ----
+    /** Live raw-packet feed (newest first, capped). */
+    private val _packets = MutableStateFlow<List<RxLog>>(emptyList())
+    val packets: StateFlow<List<RxLog>> = _packets.asStateFlow()
+
+    private val _radioStats = MutableStateFlow<RadioStats?>(null)
+    val radioStats: StateFlow<RadioStats?> = _radioStats.asStateFlow()
+
+    private val _coreStats = MutableStateFlow<CoreStats?>(null)
+    val coreStats: StateFlow<CoreStats?> = _coreStats.asStateFlow()
+
+    private val _packetStats = MutableStateFlow<PacketStats?>(null)
+    val packetStats: StateFlow<PacketStats?> = _packetStats.asStateFlow()
+
+    /** Rolling noise-floor history (dBm), oldest first, capped — for the noise graph. */
+    private val _noiseHistory = MutableStateFlow<List<Int>>(emptyList())
+    val noiseHistory: StateFlow<List<Int>> = _noiseHistory.asStateFlow()
+
+    private var statsJob: Job? = null
 
     // --- internal sync/send bookkeeping ---
     private val contactAccumulator = mutableListOf<Contact>()
@@ -59,18 +88,42 @@ class MeshSession(
     /** Call once the link reports Connected. */
     fun start() {
         scope.launch { link.send(Requests.appStart()) }
+        startStatsPolling()
     }
 
     fun reset() {
+        statsJob?.cancel(); statsJob = null
         _self.value = null
         _contacts.value = emptyList()
         _channels.value = emptyList()
         _messages.value = emptyMap()
+        _packets.value = emptyList()
+        _radioStats.value = null
+        _coreStats.value = null
+        _packetStats.value = null
+        _noiseHistory.value = emptyList()
         contactAccumulator.clear()
         channelAccumulator.clear()
         pendingSends.clear()
         enumeratingChannels = false
         draining = false
+    }
+
+    /** Poll radio stats every 2s (noise/rssi/snr) and core/packet stats less often. */
+    private fun startStatsPolling() {
+        statsJob?.cancel()
+        statsJob = scope.launch {
+            var tick = 0
+            while (true) {
+                link.send(Requests.getStats(StatsType.RADIO))
+                if (tick % 3 == 0) {
+                    link.send(Requests.getStats(StatsType.CORE))
+                    link.send(Requests.getStats(StatsType.PACKETS))
+                }
+                tick++
+                delay(2_000)
+            }
+        }
     }
 
     // ---- sending ----------------------------------------------------------
@@ -146,7 +199,15 @@ class MeshSession(
                 else onSendFailed()
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
-            else -> Unit // adverts/status/etc. handled elsewhere later
+            is Incoming.RxPacket -> _packets.update { (listOf(f.log) + it).take(MAX_PACKETS) }
+            is Incoming.RadioStatsResp -> {
+                _radioStats.value = f.stats
+                _noiseHistory.update { (it + f.stats.noiseFloor).takeLast(NOISE_HISTORY) }
+            }
+            is Incoming.CoreStatsResp -> _coreStats.value = f.stats
+            is Incoming.PacketStatsResp -> _packetStats.value = f.stats
+
+            else -> Unit // adverts/path-updates/etc. handled elsewhere later
         }
     }
 

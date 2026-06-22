@@ -146,14 +146,54 @@ data class TraceResult(
     val finalSnrDb: Double get() = finalSnrQ / 4.0
 }
 
-/** A logged raw RX packet (PUSH_CODE_LOG_RX_DATA) — the packet-monitor feed. */
+/**
+ * A logged raw RX packet (PUSH_CODE_LOG_RX_DATA) — the packet-monitor feed.
+ * The payload/route type is derived from the packet header byte (raw[0]).
+ */
 data class RxLog(
     val snrQ: Int,
     val rssi: Int,
-    val payloadType: Int,
     val raw: ByteArray,
 ) {
     val snrDb: Double get() = snrQ / 4.0
+    val length: Int get() = raw.size
+    val header: Int get() = if (raw.isNotEmpty()) raw[0].toInt() and 0xFF else 0
+    val payloadType: Int get() = (header shr 2) and 0x0F
+    val routeType: Int get() = header and 0x03
+    val typeName: String get() = PayloadType.name(payloadType)
+    val routeName: String get() = RouteType.name(routeType)
+    val hex: String get() = raw.toHex()
+
     override fun equals(other: Any?) = other is RxLog && raw.contentEquals(other.raw) && rssi == other.rssi
     override fun hashCode() = raw.contentHashCode() * 31 + rssi
 }
+
+/** RESP_CODE_STATS, STATS_TYPE_CORE. */
+data class CoreStats(
+    val batteryMilliVolts: Int,
+    val uptimeSecs: Long,
+    val errFlags: Int,
+    val txQueueLen: Int,
+)
+
+/** RESP_CODE_STATS, STATS_TYPE_RADIO. */
+data class RadioStats(
+    val noiseFloor: Int,
+    val lastRssi: Int,
+    val lastSnrQ: Int,
+    val txAirtimeSecs: Long,
+    val rxAirtimeSecs: Long,
+) {
+    val lastSnrDb: Double get() = lastSnrQ / 4.0
+}
+
+/** RESP_CODE_STATS, STATS_TYPE_PACKETS. */
+data class PacketStats(
+    val recv: Long,
+    val sent: Long,
+    val sentFlood: Long,
+    val sentDirect: Long,
+    val recvFlood: Long,
+    val recvDirect: Long,
+    val recvErrors: Long,
+)

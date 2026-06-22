@@ -78,6 +78,8 @@ class FrameReader(private val data: ByteArray, start: Int = 0) {
 
     fun i8(): Int = data[pos++].toInt()
 
+    fun i16(): Int = u16().toShort().toInt()
+
     fun i32(): Int = u32().toInt()
 
     fun bytes(n: Int): ByteArray {
