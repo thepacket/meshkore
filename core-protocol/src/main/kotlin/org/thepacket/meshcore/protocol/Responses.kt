@@ -65,6 +65,7 @@ sealed interface Incoming {
 
     data class Tuning(val params: TuningParams) : Incoming
     data class AutoAdd(val config: AutoAddConfig) : Incoming
+    data class Device(val info: DeviceInfo) : Incoming
 
     /** Any frame not (yet) structurally decoded. [code] is the leading byte. */
     data class Raw(val code: Int, val payload: ByteArray) : Incoming {
@@ -93,6 +94,7 @@ object FrameDecoder {
                 Resp.CURR_TIME -> Incoming.DeviceTime(r.u32())
                 Resp.NO_MORE_MESSAGES -> Incoming.NoMoreMessages
                 Resp.BATT_AND_STORAGE -> Incoming.Battery(parseBattery(r))
+                Resp.DEVICE_INFO -> Incoming.Device(parseDeviceInfo(r))
                 Resp.STATS -> parseStats(r)
                 Resp.TUNING_PARAMS -> Incoming.Tuning(TuningParams(r.u32() / 1000.0, r.u32() / 1000.0))
                 Resp.AUTOADD_CONFIG -> Incoming.AutoAdd(
@@ -146,6 +148,21 @@ object FrameDecoder {
         val ack = if (r.remaining >= 4) r.u32() else 0
         val est = if (r.remaining >= 4) r.u32() else 0
         return SendResult(flood, ack, est)
+    }
+
+    // RESP_CODE_DEVICE_INFO: verCode(1) maxContacts/2(1) maxChannels(1) blePin(u32)
+    //   buildDate(12 cstr) manufacturer(40 cstr) firmwareVersion(20 cstr) clientRepeat(1) pathHashMode(1)
+    private fun parseDeviceInfo(r: FrameReader): DeviceInfo {
+        val ver = r.u8()
+        val maxContacts = r.u8() * 2
+        val maxChannels = r.u8()
+        val blePin = r.u32()
+        val buildDate = r.cstr(12)
+        val manufacturer = r.cstr(40)
+        val firmwareVersion = r.cstr(20)
+        val clientRepeat = if (r.remaining > 0) r.u8() != 0 else false
+        val pathHashMode = if (r.remaining > 0) r.u8() else 0
+        return DeviceInfo(ver, maxContacts, maxChannels, blePin, buildDate, manufacturer, firmwareVersion, clientRepeat, pathHashMode)
     }
 
     // RESP_CODE_BATT_AND_STORAGE: battMv(u16) usedKb(u32) totalKb(u32)

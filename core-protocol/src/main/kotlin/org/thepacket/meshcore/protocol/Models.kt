@@ -187,6 +187,19 @@ data class RadioStats(
     val lastSnrDb: Double get() = lastSnrQ / 4.0
 }
 
+/** RESP_CODE_DEVICE_INFO (reply to CMD_DEVICE_QUERY). */
+data class DeviceInfo(
+    val firmwareVerCode: Int,
+    val maxContacts: Int,
+    val maxChannels: Int,
+    val blePin: Long,
+    val buildDate: String,
+    val manufacturer: String,
+    val firmwareVersion: String,
+    val clientRepeat: Boolean,
+    val pathHashMode: Int,
+)
+
 /** RESP_CODE_TUNING_PARAMS (values are stored ×1000 on the wire). */
 data class TuningParams(val rxDelayBase: Double, val airtimeFactor: Double)
 

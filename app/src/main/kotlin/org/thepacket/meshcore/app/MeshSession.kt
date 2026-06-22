@@ -1,6 +1,8 @@
 package org.thepacket.meshcore.app
 
 import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -14,8 +16,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.thepacket.meshcore.ble.MeshCoreLink
 import org.thepacket.meshcore.protocol.AutoAddConfig
+import org.thepacket.meshcore.protocol.BattAndStorage
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.CoreStats
+import org.thepacket.meshcore.protocol.DeviceInfo
 import org.thepacket.meshcore.protocol.Incoming
 import org.thepacket.meshcore.protocol.PacketStats
 import org.thepacket.meshcore.protocol.PayloadType
@@ -92,6 +96,16 @@ class MeshSession(
     private val _autoAdd = MutableStateFlow<AutoAddConfig?>(null)
     val autoAdd: StateFlow<AutoAddConfig?> = _autoAdd.asStateFlow()
 
+    private val _deviceInfo = MutableStateFlow<DeviceInfo?>(null)
+    val deviceInfo: StateFlow<DeviceInfo?> = _deviceInfo.asStateFlow()
+
+    private val _battStorage = MutableStateFlow<BattAndStorage?>(null)
+    val battStorage: StateFlow<BattAndStorage?> = _battStorage.asStateFlow()
+
+    /** Rolling in-app debug log (newest last, capped) for the Debug Logs viewer. */
+    private val _logs = MutableStateFlow<List<String>>(emptyList())
+    val logs: StateFlow<List<String>> = _logs.asStateFlow()
+
     /** Emitted after each settings write (OK/ERR) for UI feedback. */
     private val _settingsResult = MutableSharedFlow<SettingsResult>(extraBufferCapacity = 8)
     val settingsResult: SharedFlow<SettingsResult> = _settingsResult.asSharedFlow()
@@ -131,7 +145,15 @@ class MeshSession(
         // Pre-fetch config that SELF_INFO doesn't carry, so the settings form pre-fills.
         scope.launch { link.send(Requests.getTuningParams()) }
         scope.launch { link.send(Requests.getAutoAddConfig()) }
+        scope.launch { link.send(Requests.deviceQuery()) }
+        scope.launch { link.send(Requests.getBattAndStorage()) }
         startStatsPolling()
+    }
+
+    private fun dbg(msg: String) {
+        Log.d(TAG, msg)
+        val line = "${java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())}  $msg"
+        _logs.update { (it + line).takeLast(500) }
     }
 
     fun reset() {
@@ -148,6 +170,8 @@ class MeshSession(
         _heard.value = emptyList()
         _tuning.value = null
         _autoAdd.value = null
+        _deviceInfo.value = null
+        _battStorage.value = null
         pendingSettings.clear()
         lastAdvertSnrQ = null; lastAdvertRssi = null
         contactAccumulator.clear()
@@ -226,6 +250,92 @@ class MeshSession(
 
     fun syncTimeFromPhone() = applySetting("Time", Requests.setDeviceTime(System.currentTimeMillis() / 1000))
 
+    // ---- extra tools ------------------------------------------------------
+
+    fun reboot() = scope.launch { runCatching { link.send(Requests.reboot()) } }.let {}
+
+    fun factoryReset() = scope.launch { runCatching { link.send(Requests.factoryReset()) } }.let {}
+
+    /** Clear local app data (chat history, heard list, packet feed). Contacts re-sync on connect. */
+    fun purgeLocalData() {
+        _messages.value = emptyMap()
+        chatStore?.save(emptyMap())
+        _heard.value = emptyList()
+        _packets.value = emptyList()
+    }
+
+    /** Export the device settings we can read, as pretty JSON (for the Export Config tool). */
+    fun exportConfigJson(): String {
+        val o = JSONObject()
+        _self.value?.let { s ->
+            o.put("node_name", s.name)
+            o.put("freq_mhz", s.freqMhz)
+            o.put("bw_khz", s.bwKhz)
+            o.put("sf", s.radioSf)
+            o.put("cr", s.radioCr)
+            o.put("tx_power_dbm", s.txPower)
+            o.put("adv_lat", s.advLat)
+            o.put("adv_lon", s.advLon)
+            o.put("advert_loc_policy", s.advertLocPolicy)
+            o.put("telemetry_base", s.telemetryModeBase)
+            o.put("telemetry_loc", s.telemetryModeLoc)
+            o.put("telemetry_env", s.telemetryModeEnv)
+            o.put("manual_add_contacts", s.manualAddContacts)
+            o.put("multi_acks", s.multiAcks)
+        }
+        _tuning.value?.let { o.put("rx_delay_base", it.rxDelayBase); o.put("airtime_factor", it.airtimeFactor) }
+        _autoAdd.value?.let { o.put("autoadd_flags", it.flags); o.put("autoadd_max_hops", it.maxHops) }
+        _deviceInfo.value?.let { o.put("client_repeat", it.clientRepeat); o.put("path_hash_mode", it.pathHashMode) }
+        return o.toString(2)
+    }
+
+    /** Apply a config JSON produced by [exportConfigJson] (Import Config tool). */
+    fun importConfigJson(json: String) {
+        val o = JSONObject(json)
+        if (o.has("node_name")) applyNodeName(o.getString("node_name"))
+        if (o.has("freq_mhz") && o.has("bw_khz") && o.has("sf") && o.has("cr")) {
+            applyRadio(o.getDouble("freq_mhz"), o.getDouble("bw_khz"), o.getInt("sf"), o.getInt("cr"),
+                o.optBoolean("client_repeat", false))
+        }
+        if (o.has("tx_power_dbm")) applyTxPower(o.getInt("tx_power_dbm"))
+        if (o.has("adv_lat") && o.has("adv_lon")) applyPosition(o.getInt("adv_lat"), o.getInt("adv_lon"))
+        if (o.has("telemetry_base")) {
+            applyOtherParams(
+                o.optInt("manual_add_contacts", 0) and 1 == 1,
+                o.getInt("telemetry_base"), o.optInt("telemetry_loc", 0), o.optInt("telemetry_env", 0),
+                o.optInt("advert_loc_policy", 0) == 1, o.optInt("multi_acks", 0),
+            )
+        }
+        if (o.has("rx_delay_base")) applyTuning(o.getDouble("rx_delay_base"), o.optDouble("airtime_factor", 0.0))
+        if (o.has("autoadd_flags")) applyAutoAdd(o.getInt("autoadd_flags"), o.optInt("autoadd_max_hops", 0))
+        if (o.has("path_hash_mode")) applyPathHashMode(o.getInt("path_hash_mode"))
+    }
+
+    /** Export the app's own data (contacts + chat history) as JSON (Export App Database). */
+    fun exportAppDataJson(): String {
+        val root = JSONObject()
+        val contactsArr = JSONArray()
+        _contacts.value.forEach { c ->
+            contactsArr.put(JSONObject().apply {
+                put("name", c.name); put("type", c.type); put("pubkey", c.publicKey.toHex())
+                put("gps_lat", c.gpsLat); put("gps_lon", c.gpsLon)
+            })
+        }
+        root.put("contacts", contactsArr)
+        val chats = JSONObject()
+        _messages.value.forEach { (conv, list) ->
+            val arr = JSONArray()
+            list.forEach { m ->
+                arr.put(JSONObject().apply {
+                    put("text", m.text); put("ts", m.timestampSecs); put("in", m.incoming); put("status", m.status.name)
+                })
+            }
+            chats.put(conv, arr)
+        }
+        root.put("chats", chats)
+        return root.toString(2)
+    }
+
     private fun applySetting(label: String, frame: ByteArray) {
         pendingSettings.addLast(label)
         scope.launch { link.send(frame) }
@@ -248,7 +358,7 @@ class MeshSession(
     // ---- incoming frames --------------------------------------------------
 
     private fun onFrame(f: Incoming) {
-        Log.d(TAG, "rx ${f::class.simpleName}")
+        dbg("rx ${f::class.simpleName}")
         when (f) {
             is Incoming.Self -> {
                 _self.value = f.info
@@ -291,6 +401,8 @@ class MeshSession(
             }
             is Incoming.Tuning -> _tuning.value = f.params
             is Incoming.AutoAdd -> _autoAdd.value = f.config
+            is Incoming.Device -> _deviceInfo.value = f.info
+            is Incoming.Battery -> _battStorage.value = f.info
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
             is Incoming.RxPacket -> {
@@ -391,7 +503,7 @@ class MeshSession(
 
     private fun onSentReply(expectedAck: Long, estTimeoutMs: Long) {
         val localId = pendingSends.pollFirst() ?: return
-        Log.d(TAG, "SENT localId=$localId expectedAck=$expectedAck estTimeout=$estTimeoutMs")
+        dbg("SENT localId=$localId expectedAck=$expectedAck estTimeout=$estTimeoutMs")
         updateMessage(localId) {
             it.copy(status = MsgStatus.Sent, expectedAck = expectedAck)
         }
@@ -422,7 +534,7 @@ class MeshSession(
                 }
             }
         }
-        Log.d(TAG, "CONFIRMED ackId=$ackId trip=${roundTripMs}ms matched=$matched")
+        dbg("CONFIRMED ackId=$ackId trip=${roundTripMs}ms matched=$matched")
         if (matched) scheduleSave()
     }
 

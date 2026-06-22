@@ -1,6 +1,9 @@
 package org.thepacket.meshcore.app.ui
 
+import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,9 +11,12 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
@@ -23,6 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -33,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -71,12 +79,38 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
     val ctx = LocalContext.current
     val tuning by session.tuning.collectAsStateWithLifecycle()
     val autoAdd by session.autoAdd.collectAsStateWithLifecycle()
+    val deviceInfo by session.deviceInfo.collectAsStateWithLifecycle()
+    val battStorage by session.battStorage.collectAsStateWithLifecycle()
+    val contacts by session.contacts.collectAsStateWithLifecycle()
+    val channels by session.channels.collectAsStateWithLifecycle()
+    val logs by session.logs.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         session.settingsResult.collect { r ->
             Toast.makeText(ctx, "${r.label}: ${if (r.ok) "saved ✓" else "failed"}", Toast.LENGTH_SHORT).show()
         }
     }
+
+    val exportConfig = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let { writeText(ctx, it, session.exportConfigJson()); toast(ctx, "Config exported") }
+    }
+    val importConfig = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            val text = readText(ctx, it)
+            if (text != null) runCatching { session.importConfigJson(text) }
+                .onSuccess { toast(ctx, "Config import sent") }
+                .onFailure { toast(ctx, "Invalid config file") }
+            else toast(ctx, "Couldn't read file")
+        }
+    }
+    val exportAppData = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let { writeText(ctx, it, session.exportAppDataJson()); toast(ctx, "App data exported") }
+    }
+
+    var showReboot by remember { mutableStateOf(false) }
+    var showFactory by remember { mutableStateOf(false) }
+    var showPurge by remember { mutableStateOf(false) }
+    var showLogs by remember { mutableStateOf(false) }
 
     if (self == null) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -104,7 +138,7 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         var bwIdx by remember(self) { mutableIntStateOf(bwList.indexOf(self.bwKhz).coerceAtLeast(0)) }
         var sfIdx by remember(self) { mutableIntStateOf((self.radioSf - 5).coerceIn(0, sfList.lastIndex)) }
         var crIdx by remember(self) { mutableIntStateOf((self.radioCr - 5).coerceIn(0, crList.lastIndex)) }
-        var repeat by remember(self) { mutableStateOf(false) }
+        var repeat by remember(deviceInfo) { mutableStateOf(deviceInfo?.clientRepeat ?: false) }
         var presetIdx by remember(self) { mutableIntStateOf(detectPreset(self.freqMhz, self.bwKhz, self.radioSf, self.radioCr)) }
         SectionCard("Radio") {
             EnumDropdown("Region preset", PRESET_NAMES, presetIdx) { i ->
@@ -218,17 +252,45 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
 
         // ---- Experimental ----
         // The firmware path_hash_mode (0–2) selects the path-hash size: mode + 1 bytes.
-        var pathHash by remember { mutableIntStateOf(0) }
+        var pathHash by remember(deviceInfo) { mutableIntStateOf(deviceInfo?.pathHashMode?.coerceIn(0, 2) ?: 0) }
         SectionCard("Experimental") {
             Text(
                 "Path-hash size used when flooding. Larger sizes reduce hash collisions in dense " +
-                    "regions (e.g. Ottawa). The device doesn't report the current value, so this " +
-                    "control is write-only.",
+                    "regions (e.g. Ottawa).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
             EnumDropdown("Path-hash size", listOf("1-byte", "2-byte", "3-byte"), pathHash) { pathHash = it }
             SaveRow { session.applyPathHashMode(pathHash) }
+        }
+
+        // ---- Device info ----
+        SectionCard("Device info") {
+            deviceInfo?.let { di ->
+                KeyVal("Firmware", "${di.firmwareVersion}  (${di.buildDate})")
+                KeyVal("Manufacturer", di.manufacturer)
+                KeyVal("Contacts", "${contacts.size} / ${di.maxContacts}")
+                KeyVal("Channels", "${channels.size} / ${di.maxChannels}")
+            } ?: Text("Reading device info…", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            battStorage?.let { b ->
+                KeyVal("Battery", "${b.batteryMilliVolts} mV")
+                if (b.storageTotalKb > 0) {
+                    val pct = (b.storageUsedKb * 100 / b.storageTotalKb)
+                    KeyVal("Storage", "$pct% · ${b.storageUsedKb} / ${b.storageTotalKb} kB")
+                }
+            }
+        }
+
+        // ---- Extra tools ----
+        SectionCard("Extra tools") {
+            ToolButton("Export config") { exportConfig.launch("meshcore-config.json") }
+            ToolButton("Import config") { importConfig.launch(arrayOf("application/json")) }
+            ToolButton("Export app data") { exportAppData.launch("meshcore-appdata.json") }
+            ToolButton("Purge local data") { showPurge = true }
+            ToolButton("Debug logs") { showLogs = true }
+            ToolButton("Reboot device") { showReboot = true }
+            ToolButton("Factory reset", danger = true) { showFactory = true }
         }
 
         // ---- Time ----
@@ -239,9 +301,98 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             SaveRow(label = "Sync now") { session.syncTimeFromPhone() }
         }
     }
+
+    ConfirmDialog(showReboot, "Reboot device", "Reboot the connected device now?", "Reboot",
+        onConfirm = { session.reboot(); toast(ctx, "Reboot sent") }, onDismiss = { showReboot = false })
+    ConfirmDialog(showFactory, "Factory reset",
+        "Erase ALL settings on the device and reboot? This cannot be undone.", "Erase", danger = true,
+        onConfirm = { session.factoryReset(); toast(ctx, "Factory reset sent") }, onDismiss = { showFactory = false })
+    ConfirmDialog(showPurge, "Purge local data",
+        "Delete this app's chat history and cached data? The device is not affected.", "Purge", danger = true,
+        onConfirm = { session.purgeLocalData(); toast(ctx, "Local data purged") }, onDismiss = { showPurge = false })
+    if (showLogs) LogsDialog(
+        logs = logs,
+        onShare = {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"; putExtra(Intent.EXTRA_TEXT, logs.joinToString("\n"))
+            }
+            ctx.startActivity(Intent.createChooser(intent, "Share debug logs"))
+        },
+        onDismiss = { showLogs = false },
+    )
 }
 
 // ---- reusable bits --------------------------------------------------------
+
+@Composable
+private fun KeyVal(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        Text(value, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(start = 12.dp))
+    }
+}
+
+@Composable
+private fun ToolButton(label: String, danger: Boolean = false, onClick: () -> Unit) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            modifier = Modifier.fillMaxWidth(),
+            color = if (danger) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
+        )
+    }
+}
+
+@Composable
+private fun ConfirmDialog(
+    show: Boolean,
+    title: String,
+    text: String,
+    confirm: String,
+    danger: Boolean = false,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    if (!show) return
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(); onDismiss() }) {
+                Text(confirm, color = if (danger) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun LogsDialog(logs: List<String>, onShare: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Debug logs") },
+        text = {
+            SelectionContainer {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    if (logs.isEmpty()) Text("No logs yet.")
+                    logs.takeLast(300).forEach {
+                        Text(it, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onShare) { Text("Share") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+private fun writeText(ctx: android.content.Context, uri: android.net.Uri, text: String) {
+    runCatching { ctx.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) } }
+}
+
+private fun readText(ctx: android.content.Context, uri: android.net.Uri): String? =
+    runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } }.getOrNull()
 
 @Composable
 private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {

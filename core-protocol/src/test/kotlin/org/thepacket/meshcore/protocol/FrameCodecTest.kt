@@ -376,6 +376,30 @@ class FrameCodecTest {
         assertEquals(-75_000_000, r.i32())
     }
 
+    @Test fun decodeDeviceInfo() {
+        val frame = FrameWriter()
+            .u8(Resp.DEVICE_INFO)
+            .u8(10)                                   // ver code
+            .u8(175)                                  // maxContacts/2 -> 350
+            .u8(40)                                   // max channels
+            .u32(0)                                   // ble pin
+            .bytes("Jun 22 2026".toByteArray().copyOf(12))
+            .bytes("LilyGo".toByteArray().copyOf(40))
+            .bytes("v1.2.3".toByteArray().copyOf(20))
+            .u8(1)                                    // client repeat
+            .u8(2)                                    // path hash mode
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.Device)
+        val info = (d as Incoming.Device).info
+        assertEquals(350, info.maxContacts)
+        assertEquals(40, info.maxChannels)
+        assertEquals("LilyGo", info.manufacturer)
+        assertEquals("v1.2.3", info.firmwareVersion)
+        assertEquals(true, info.clientRepeat)
+        assertEquals(2, info.pathHashMode)
+    }
+
     @Test fun unknownCodeBecomesRawNotCrash() {
         val decoded = FrameDecoder.decode(byteArrayOf(0x7F, 1, 2, 3))
         assertTrue(decoded is Incoming.Raw)

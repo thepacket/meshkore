@@ -161,6 +161,9 @@ object Requests {
 
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
+    /** Erase all device settings and reboot. Payload is the literal "reset" guard. */
+    fun factoryReset(): ByteArray = FrameWriter().u8(Cmd.FACTORY_RESET).str("reset").build()
+
     /** Request a stats blob (reply RESP_CODE_STATS). See [StatsType]. */
     fun getStats(type: Int): ByteArray = FrameWriter().u8(Cmd.GET_STATS).u8(type).build()
 
