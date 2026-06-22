@@ -60,7 +60,9 @@ fun PacketMonitorContent(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            items(packets, key = { System.identityHashCode(it) }) { p -> PacketRow(p) { detail = p } }
+            items(packets, key = { System.identityHashCode(it) }) { p ->
+                PacketRow(p, contacts, self) { detail = p }
+            }
         }
     }
 
@@ -164,7 +166,9 @@ private fun epoch(sec: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(sec * 1000))
 
 @Composable
-private fun PacketRow(p: RxLog, onClick: () -> Unit) {
+private fun PacketRow(p: RxLog, contacts: List<Contact>, self: SelfInfo?, onClick: () -> Unit) {
+    val parsed = remember(p) { PacketInspector.parse(p.raw) }
+    val source = rowSource(parsed, contacts, self)
     Row(
         Modifier
             .fillMaxWidth()
@@ -176,11 +180,40 @@ private fun PacketRow(p: RxLog, onClick: () -> Unit) {
     ) {
         TypePill(p.payloadType, p.typeName)
         Column(Modifier.weight(1f)) {
-            Text("${p.length} B · ${p.routeName}", style = MaterialTheme.typography.bodyMedium)
-            Text("SNR ${p.snrDb} · RSSI ${p.rssi}", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            Text(
+                source ?: "${p.length} B · ${p.routeName}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (source != null) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            Text(
+                if (source != null) "${p.length} B · ${p.routeName} · SNR ${p.snrDb} · RSSI ${p.rssi}"
+                else "SNR ${p.snrDb} · RSSI ${p.rssi}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
         }
     }
+}
+
+/** A short source label for the list row: advertiser, or src-hash → contact, else null. */
+private fun rowSource(p: ParsedPacket, contacts: List<Contact>, self: SelfInfo?): String? {
+    p.advertName?.takeIf { it.isNotBlank() }?.let { return it }
+    p.advertPubKey?.let { return resolveKeyShort(it, contacts, self) }
+    p.srcHash?.let { return nameForHash(it, contacts, self) }
+    return null
+}
+
+private fun nameForHash(hash: Int, contacts: List<Contact>, self: SelfInfo?): String {
+    contacts.firstOrNull { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hash }
+        ?.name?.ifBlank { null }?.let { return it }
+    if (self != null && self.publicKey.isNotEmpty() && (self.publicKey[0].toInt() and 0xFF) == hash) return "(me)"
+    return "0x%02X".format(hash)
+}
+
+private fun resolveKeyShort(key: ByteArray, contacts: List<Contact>, self: SelfInfo?): String {
+    if (self != null && self.publicKey.size >= 32 && self.publicKey.copyOf(32).contentEquals(key.copyOf(32))) return "(this node)"
+    val c = contacts.firstOrNull { it.publicKey.size >= 32 && it.publicKey.copyOf(32).contentEquals(key.copyOf(32)) }
+    return c?.name?.ifBlank { c.keyPrefixHex } ?: (key.copyOf(3).toHex() + "…")
 }
 
 @Composable
