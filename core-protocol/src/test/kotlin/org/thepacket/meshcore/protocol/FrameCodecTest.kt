@@ -280,6 +280,50 @@ class FrameCodecTest {
             Requests.getStats(StatsType.RADIO))
     }
 
+    @Test fun inspectTxtMsgSrcDestPath() {
+        // header: route=FLOOD(1), type=TXT_MSG(2) -> (2<<2)|1 = 0x09
+        val header = (PayloadType.TXT_MSG shl 2) or RouteType.FLOOD
+        val pathLenByte = (0 shl 6) or 2 // hashSize 1, 2 hops
+        val raw = FrameWriter()
+            .u8(header)
+            .u8(pathLenByte).u8(0xA1).u8(0xB2)          // path: 2 hop hashes
+            .u8(0xDD).u8(0xCC).u8(0x12).u8(0x34)         // dest, src, MAC(2)
+            .bytes(ByteArray(8))                          // ciphertext
+            .build()
+        val p = PacketInspector.parse(raw)
+        assertEquals(PayloadType.TXT_MSG, p.payloadType)
+        assertEquals("flood", p.routeName)
+        assertEquals(0xDD, p.destHash)
+        assertEquals(0xCC, p.srcHash)
+        assertEquals(listOf(0xA1, 0xB2), p.pathHashes)
+    }
+
+    @Test fun inspectAdvertExtractsKeyNameLatLon() {
+        val pub = ByteArray(32) { (it + 5).toByte() }
+        val sig = ByteArray(64)
+        val flags = 0x10 or 0x80 or ContactType.REPEATER // latlon + name + type
+        val appData = FrameWriter().u8(flags).i32(45_000_000).i32(-75_000_000).str("WAKE_R").build()
+        val header = (PayloadType.ADVERT shl 2) or RouteType.FLOOD
+        val raw = FrameWriter()
+            .u8(header).u8(0) // path_len = 0
+            .bytes(pub).u32(1_700_000_000L).bytes(sig).bytes(appData)
+            .build()
+        val p = PacketInspector.parse(raw)
+        assertEquals(PayloadType.ADVERT, p.payloadType)
+        assertArrayEquals(pub, p.advertPubKey)
+        assertEquals("WAKE_R", p.advertName)
+        assertEquals(45_000_000, p.advertLat)
+        assertEquals(-75_000_000, p.advertLon)
+        assertEquals(1_700_000_000L, p.advertTimestamp)
+    }
+
+    @Test fun inspectTruncatedPacketDoesNotCrash() {
+        val p = PacketInspector.parse(byteArrayOf(0x09, 0x00, 0x01)) // header + path_len + partial
+        assertEquals(PayloadType.TXT_MSG, p.payloadType)
+        // not enough payload for dest/src — left null, no throw
+        assertEquals(null, p.destHash)
+    }
+
     @Test fun unknownCodeBecomesRawNotCrash() {
         val decoded = FrameDecoder.decode(byteArrayOf(0x7F, 1, 2, 3))
         assertTrue(decoded is Incoming.Raw)

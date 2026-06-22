@@ -96,7 +96,7 @@ fun MainScaffold(
         when (tab) {
             MainTab.Chats -> HomeContent(self, channels, contacts, onOpenConversation, m)
             MainTab.Heard -> HeardContent(heard, self, m)
-            MainTab.Packets -> PacketMonitorContent(packets, m)
+            MainTab.Packets -> PacketMonitorContent(packets, contacts, self, m)
             MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, m)
             MainTab.Map -> MapContent(self, contacts, heard, m)
         }
