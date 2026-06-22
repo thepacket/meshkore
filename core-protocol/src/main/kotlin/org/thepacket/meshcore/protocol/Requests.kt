@@ -51,6 +51,63 @@ object Requests {
     fun setAdvertName(name: String): ByteArray =
         FrameWriter().u8(Cmd.SET_ADVERT_NAME).str(name).build()
 
+    /** Set this node's advertised GPS position. lat/lon in 1e-6 degrees (±90 / ±180). */
+    fun setAdvertLatLon(latE6: Int, lonE6: Int): ByteArray =
+        FrameWriter().u8(Cmd.SET_ADVERT_LATLON).i32(latE6).i32(lonE6).build()
+
+    /**
+     * Set LoRa radio params. Firmware units: frequency in kHz (MHz×1000), bandwidth in Hz
+     * (kHz×1000), sf 5–12, cr 5–8, repeat = client-repeat on/off.
+     */
+    fun setRadioParams(freqKhz: Long, bwHz: Long, sf: Int, cr: Int, repeat: Boolean): ByteArray =
+        FrameWriter()
+            .u8(Cmd.SET_RADIO_PARAMS)
+            .u32(freqKhz)
+            .u32(bwHz)
+            .u8(sf)
+            .u8(cr)
+            .u8(if (repeat) 1 else 0)
+            .build()
+
+    /**
+     * Misc params (CMD_SET_OTHER_PARAMS). telemetry byte = (env<<4)|(loc<<2)|base.
+     * All four bytes are sent so nothing is left at a stale default.
+     */
+    fun setOtherParams(
+        manualAddContacts: Boolean,
+        telemetryBase: Int,
+        telemetryLoc: Int,
+        telemetryEnv: Int,
+        advertLocPolicy: Int,
+        multiAcks: Int,
+    ): ByteArray = FrameWriter()
+        .u8(Cmd.SET_OTHER_PARAMS)
+        .u8(if (manualAddContacts) 1 else 0)
+        .u8(((telemetryEnv and 3) shl 4) or ((telemetryLoc and 3) shl 2) or (telemetryBase and 3))
+        .u8(advertLocPolicy)
+        .u8(multiAcks)
+        .build()
+
+    /** Tuning params: rx-delay base and airtime factor (sent as value×1000). */
+    fun setTuningParams(rxDelayBase: Double, airtimeFactor: Double): ByteArray =
+        FrameWriter()
+            .u8(Cmd.SET_TUNING_PARAMS)
+            .u32((rxDelayBase * 1000).toLong())
+            .u32((airtimeFactor * 1000).toLong())
+            .build()
+
+    fun getTuningParams(): ByteArray = FrameWriter().u8(Cmd.GET_TUNING_PARAMS).build()
+
+    /** Auto-add config: [AutoAdd] flag bitmask + max hops (0 = unlimited). */
+    fun setAutoAddConfig(flags: Int, maxHops: Int): ByteArray =
+        FrameWriter().u8(Cmd.SET_AUTOADD_CONFIG).u8(flags).u8(maxHops).build()
+
+    fun getAutoAddConfig(): ByteArray = FrameWriter().u8(Cmd.GET_AUTOADD_CONFIG).build()
+
+    /** Path-hash mode (0–2). Frame: [cmd, reserved(0), mode]. */
+    fun setPathHashMode(mode: Int): ByteArray =
+        FrameWriter().u8(Cmd.SET_PATH_HASH_MODE).u8(0).u8(mode).build()
+
     /**
      * Direct text message to a contact.
      * Layout: [cmd, txtType, attempt, timestamp(u32), pubKeyPrefix(6), text...].
@@ -106,19 +163,6 @@ object Requests {
 
     /** Request a stats blob (reply RESP_CODE_STATS). See [StatsType]. */
     fun getStats(type: Int): ByteArray = FrameWriter().u8(Cmd.GET_STATS).u8(type).build()
-
-    /**
-     * Set LoRa radio parameters. Layout (confirm units against MyMesh.cpp):
-     * [cmd, freq(u32 kHz), bw(u32 kHz), sf(u8), cr(u8)].
-     */
-    fun setRadioParams(freqKhz: Long, bwKhz: Long, sf: Int, cr: Int): ByteArray =
-        FrameWriter()
-            .u8(Cmd.SET_RADIO_PARAMS)
-            .u32(freqKhz)
-            .u32(bwKhz)
-            .u8(sf)
-            .u8(cr)
-            .build()
 
     fun setRadioTxPower(dbm: Int): ByteArray =
         FrameWriter().u8(Cmd.SET_RADIO_TX_POWER).u8(dbm).build()

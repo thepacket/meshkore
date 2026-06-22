@@ -141,6 +141,28 @@ object StatsType {
     const val PACKETS = 2
 }
 
+/** Telemetry access modes (NodePrefs). */
+object TelemMode {
+    const val DENY = 0
+    const val ALLOW_FLAGS = 1
+    const val ALLOW_ALL = 2
+}
+
+/** advert_loc_policy values. */
+object AdvertLoc {
+    const val NONE = 0
+    const val SHARE = 1
+}
+
+/** auto-add config bit flags. */
+object AutoAdd {
+    const val OVERWRITE_OLDEST = 0x01
+    const val CHAT = 0x02
+    const val REPEATER = 0x04
+    const val ROOM = 0x08
+    const val SENSOR = 0x10
+}
+
 /**
  * Packet payload types (Packet.h). The first byte of a raw packet is the header:
  * route = h & 0x03, payloadType = (h >> 2) & 0x0F, version = (h >> 6) & 0x03.

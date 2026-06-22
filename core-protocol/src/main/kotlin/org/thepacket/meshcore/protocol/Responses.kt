@@ -63,6 +63,9 @@ sealed interface Incoming {
     /** A RESP_CODE_STATS with an unrecognised sub-type. */
     data class UnknownStats(val subType: Int) : Incoming
 
+    data class Tuning(val params: TuningParams) : Incoming
+    data class AutoAdd(val config: AutoAddConfig) : Incoming
+
     /** Any frame not (yet) structurally decoded. [code] is the leading byte. */
     data class Raw(val code: Int, val payload: ByteArray) : Incoming {
         override fun equals(other: Any?) = other is Raw && code == other.code && payload.contentEquals(other.payload)
@@ -91,6 +94,10 @@ object FrameDecoder {
                 Resp.NO_MORE_MESSAGES -> Incoming.NoMoreMessages
                 Resp.BATT_AND_STORAGE -> Incoming.Battery(parseBattery(r))
                 Resp.STATS -> parseStats(r)
+                Resp.TUNING_PARAMS -> Incoming.Tuning(TuningParams(r.u32() / 1000.0, r.u32() / 1000.0))
+                Resp.AUTOADD_CONFIG -> Incoming.AutoAdd(
+                    AutoAddConfig(if (r.remaining > 0) r.u8() else 0, if (r.remaining > 0) r.u8() else 0)
+                )
                 Resp.CONTACT_MSG_RECV, Resp.CONTACT_MSG_RECV_V3 ->
                     Incoming.Message(parseMessage(r, channel = false, v3 = code == Resp.CONTACT_MSG_RECV_V3))
                 Resp.CHANNEL_MSG_RECV, Resp.CHANNEL_MSG_RECV_V3 ->

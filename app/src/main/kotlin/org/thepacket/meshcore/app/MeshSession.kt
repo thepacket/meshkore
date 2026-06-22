@@ -4,12 +4,16 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.thepacket.meshcore.ble.MeshCoreLink
+import org.thepacket.meshcore.protocol.AutoAddConfig
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.Incoming
@@ -21,7 +25,11 @@ import org.thepacket.meshcore.protocol.Requests
 import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.StatsType
+import org.thepacket.meshcore.protocol.TuningParams
 import java.util.ArrayDeque
+
+/** Result of an applied settings write, for UI feedback. */
+data class SettingsResult(val label: String, val ok: Boolean)
 
 /**
  * Post-connection protocol orchestration for one companion link: the APP_START
@@ -77,6 +85,20 @@ class MeshSession(
     private val _heard = MutableStateFlow<List<HeardEntry>>(emptyList())
     val heard: StateFlow<List<HeardEntry>> = _heard.asStateFlow()
 
+    // ---- settings (config that SELF_INFO doesn't return is fetched on connect) ----
+    private val _tuning = MutableStateFlow<TuningParams?>(null)
+    val tuning: StateFlow<TuningParams?> = _tuning.asStateFlow()
+
+    private val _autoAdd = MutableStateFlow<AutoAddConfig?>(null)
+    val autoAdd: StateFlow<AutoAddConfig?> = _autoAdd.asStateFlow()
+
+    /** Emitted after each settings write (OK/ERR) for UI feedback. */
+    private val _settingsResult = MutableSharedFlow<SettingsResult>(extraBufferCapacity = 8)
+    val settingsResult: SharedFlow<SettingsResult> = _settingsResult.asSharedFlow()
+
+    /** Labels of settings writes awaiting their OK/ERR reply (FIFO; link is sequential). */
+    private val pendingSettings = ArrayDeque<String>()
+
     private var statsJob: Job? = null
     /** Signal from the most recent ADVERT-type RX packet, to attach to the next advert push. */
     private var lastAdvertSnrQ: Int? = null
@@ -106,6 +128,9 @@ class MeshSession(
     /** Call once the link reports Connected. */
     fun start() {
         scope.launch { link.send(Requests.appStart()) }
+        // Pre-fetch config that SELF_INFO doesn't carry, so the settings form pre-fills.
+        scope.launch { link.send(Requests.getTuningParams()) }
+        scope.launch { link.send(Requests.getAutoAddConfig()) }
         startStatsPolling()
     }
 
@@ -121,6 +146,9 @@ class MeshSession(
         _packetStats.value = null
         _noiseHistory.value = emptyList()
         _heard.value = emptyList()
+        _tuning.value = null
+        _autoAdd.value = null
+        pendingSettings.clear()
         lastAdvertSnrQ = null; lastAdvertRssi = null
         contactAccumulator.clear()
         channelAccumulator.clear()
@@ -168,6 +196,46 @@ class MeshSession(
         }
     }
 
+    // ---- settings writes (each elicits an OK/ERR -> settingsResult) -------
+
+    fun applyNodeName(name: String) = applySetting("Node name", Requests.setAdvertName(name))
+
+    fun applyRadio(freqMhz: Double, bwKhz: Double, sf: Int, cr: Int, clientRepeat: Boolean) =
+        applySetting("Radio", Requests.setRadioParams((freqMhz * 1000).toLong(), (bwKhz * 1000).toLong(), sf, cr, clientRepeat))
+
+    fun applyTxPower(dbm: Int) = applySetting("TX power", Requests.setRadioTxPower(dbm))
+
+    fun applyPosition(latE6: Int, lonE6: Int) = applySetting("Position", Requests.setAdvertLatLon(latE6, lonE6))
+
+    fun applyOtherParams(manualAdd: Boolean, telemBase: Int, telemLoc: Int, telemEnv: Int, shareLocation: Boolean, multiAcks: Int) =
+        applySetting(
+            "Network & telemetry",
+            Requests.setOtherParams(
+                manualAdd, telemBase, telemLoc, telemEnv,
+                if (shareLocation) org.thepacket.meshcore.protocol.AdvertLoc.SHARE else org.thepacket.meshcore.protocol.AdvertLoc.NONE,
+                multiAcks,
+            ),
+        )
+
+    fun applyAutoAdd(flags: Int, maxHops: Int) = applySetting("Auto-add", Requests.setAutoAddConfig(flags, maxHops))
+
+    fun applyTuning(rxDelayBase: Double, airtimeFactor: Double) =
+        applySetting("Tuning", Requests.setTuningParams(rxDelayBase, airtimeFactor))
+
+    fun applyPathHashMode(mode: Int) = applySetting("Path-hash mode", Requests.setPathHashMode(mode))
+
+    fun syncTimeFromPhone() = applySetting("Time", Requests.setDeviceTime(System.currentTimeMillis() / 1000))
+
+    private fun applySetting(label: String, frame: ByteArray) {
+        pendingSettings.addLast(label)
+        scope.launch { link.send(frame) }
+    }
+
+    private fun resolveSetting(ok: Boolean) {
+        val label = pendingSettings.pollFirst() ?: return
+        _settingsResult.tryEmit(SettingsResult(label, ok))
+    }
+
     private fun newOutgoing(convId: String, text: String) = ChatMessage(
         localId = ++localIdSeq,
         conversationId = convId,
@@ -213,10 +281,16 @@ class MeshSession(
             Incoming.NoMoreMessages -> draining = false
 
             is Incoming.Sent -> onSentReply(f.result.expectedAck, f.result.estTimeoutMs)
-            Incoming.Ok -> onSendAcceptedNoAck()
-            is Incoming.Err ->
-                if (enumeratingChannels) finishChannelEnumeration() // err = no more channel slots
-                else onSendFailed()
+            Incoming.Ok ->
+                if (pendingSettings.isNotEmpty()) resolveSetting(true) // settings write ack
+                else onSendAcceptedNoAck()
+            is Incoming.Err -> when {
+                pendingSettings.isNotEmpty() -> resolveSetting(false)
+                enumeratingChannels -> finishChannelEnumeration() // err = no more channel slots
+                else -> onSendFailed()
+            }
+            is Incoming.Tuning -> _tuning.value = f.params
+            is Incoming.AutoAdd -> _autoAdd.value = f.config
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
             is Incoming.RxPacket -> {

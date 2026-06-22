@@ -324,6 +324,58 @@ class FrameCodecTest {
         assertEquals(null, p.destHash)
     }
 
+    @Test fun setRadioParamsShape() {
+        // 915 MHz -> 915000 kHz, 250 kHz -> 250000 Hz, sf10 cr5 repeat on
+        val f = Requests.setRadioParams(915_000, 250_000, 10, 5, repeat = true)
+        val r = FrameReader(f)
+        assertEquals(Cmd.SET_RADIO_PARAMS, r.u8())
+        assertEquals(915_000L, r.u32())
+        assertEquals(250_000L, r.u32())
+        assertEquals(10, r.u8())
+        assertEquals(5, r.u8())
+        assertEquals(1, r.u8())
+    }
+
+    @Test fun setOtherParamsPacksTelemetry() {
+        val f = Requests.setOtherParams(
+            manualAddContacts = true, telemetryBase = 2, telemetryLoc = 1, telemetryEnv = 2,
+            advertLocPolicy = AdvertLoc.SHARE, multiAcks = 3,
+        )
+        val r = FrameReader(f)
+        assertEquals(Cmd.SET_OTHER_PARAMS, r.u8())
+        assertEquals(1, r.u8())                       // manual add
+        val telem = r.u8()
+        assertEquals(2, telem and 0x03)               // base
+        assertEquals(1, (telem shr 2) and 0x03)       // loc
+        assertEquals(2, (telem shr 4) and 0x03)       // env
+        assertEquals(AdvertLoc.SHARE, r.u8())
+        assertEquals(3, r.u8())
+    }
+
+    @Test fun decodeTuningAndAutoAdd() {
+        val t = FrameDecoder.decode(FrameWriter().u8(Resp.TUNING_PARAMS).u32(1500).u32(2000).build())
+        assertTrue(t is Incoming.Tuning)
+        assertEquals(1.5, (t as Incoming.Tuning).params.rxDelayBase, 1e-9)
+        assertEquals(2.0, t.params.airtimeFactor, 1e-9)
+
+        val a = FrameDecoder.decode(FrameWriter().u8(Resp.AUTOADD_CONFIG).u8(AutoAdd.CHAT or AutoAdd.REPEATER).u8(5).build())
+        assertTrue(a is Incoming.AutoAdd)
+        assertEquals(AutoAdd.CHAT or AutoAdd.REPEATER, (a as Incoming.AutoAdd).config.flags)
+        assertEquals(5, a.config.maxHops)
+    }
+
+    @Test fun setPathHashModeShape() {
+        assertArrayEquals(byteArrayOf(Cmd.SET_PATH_HASH_MODE.toByte(), 0, 2), Requests.setPathHashMode(2))
+    }
+
+    @Test fun setAdvertLatLonRoundTrips() {
+        val f = Requests.setAdvertLatLon(45_000_000, -75_000_000)
+        val r = FrameReader(f)
+        assertEquals(Cmd.SET_ADVERT_LATLON, r.u8())
+        assertEquals(45_000_000, r.i32())
+        assertEquals(-75_000_000, r.i32())
+    }
+
     @Test fun unknownCodeBecomesRawNotCrash() {
         val decoded = FrameDecoder.decode(byteArrayOf(0x7F, 1, 2, 3))
         assertTrue(decoded is Incoming.Raw)

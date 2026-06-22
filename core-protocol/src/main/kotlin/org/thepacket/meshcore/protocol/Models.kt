@@ -187,6 +187,12 @@ data class RadioStats(
     val lastSnrDb: Double get() = lastSnrQ / 4.0
 }
 
+/** RESP_CODE_TUNING_PARAMS (values are stored ×1000 on the wire). */
+data class TuningParams(val rxDelayBase: Double, val airtimeFactor: Double)
+
+/** RESP_CODE_AUTOADD_CONFIG: [AutoAdd] flag bitmask + max hops. */
+data class AutoAddConfig(val flags: Int, val maxHops: Int)
+
 /** RESP_CODE_STATS, STATS_TYPE_PACKETS. */
 data class PacketStats(
     val recv: Long,

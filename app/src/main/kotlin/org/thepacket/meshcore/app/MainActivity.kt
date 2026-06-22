@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
                         tab = state.tab,
                         onTab = vm::setTab,
                         onDisconnect = vm::disconnect,
+                        session = vm.session,
                         self = self,
                         channels = channels,
                         contacts = contacts,

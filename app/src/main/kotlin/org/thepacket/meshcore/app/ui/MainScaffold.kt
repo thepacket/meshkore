@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -19,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.MainTab
+import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.PacketStats
@@ -32,6 +34,7 @@ fun MainScaffold(
     tab: MainTab,
     onTab: (MainTab) -> Unit,
     onDisconnect: () -> Unit,
+    session: MeshSession,
     self: SelfInfo?,
     channels: List<ChannelEntry>,
     contacts: List<Contact>,
@@ -49,6 +52,7 @@ fun MainScaffold(
         MainTab.Packets -> "Packet monitor"
         MainTab.Stats -> "Statistics"
         MainTab.Map -> "Map"
+        MainTab.Settings -> "Settings"
     }
     Scaffold(
         topBar = {
@@ -89,6 +93,12 @@ fun MainScaffold(
                     icon = { Icon(Icons.Default.Map, contentDescription = null) },
                     label = { Text("Map") },
                 )
+                NavigationBarItem(
+                    selected = tab == MainTab.Settings,
+                    onClick = { onTab(MainTab.Settings) },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                    label = { Text("Settings") },
+                )
             }
         },
     ) { pad ->
@@ -99,6 +109,7 @@ fun MainScaffold(
             MainTab.Packets -> PacketMonitorContent(packets, contacts, self, m)
             MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, m)
             MainTab.Map -> MapContent(self, contacts, heard, m)
+            MainTab.Settings -> SettingsContent(session, self, m)
         }
     }
 }
