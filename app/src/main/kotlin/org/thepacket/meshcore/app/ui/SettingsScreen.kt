@@ -217,16 +217,17 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         }
 
         // ---- Experimental ----
+        // The firmware path_hash_mode (0–2) selects the path-hash size: mode + 1 bytes.
         var pathHash by remember { mutableIntStateOf(0) }
         SectionCard("Experimental") {
             Text(
-                "Path-hash mode sets the path-hash size used when flooding. Higher values reduce " +
-                    "hash collisions in dense regions (e.g. Ottawa). The device doesn't report the " +
-                    "current value, so this control is write-only.",
+                "Path-hash size used when flooding. Larger sizes reduce hash collisions in dense " +
+                    "regions (e.g. Ottawa). The device doesn't report the current value, so this " +
+                    "control is write-only.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
-            EnumDropdown("Path-hash mode (0–2)", listOf("0", "1", "2"), pathHash) { pathHash = it }
+            EnumDropdown("Path-hash size", listOf("1-byte", "2-byte", "3-byte"), pathHash) { pathHash = it }
             SaveRow { session.applyPathHashMode(pathHash) }
         }
 
