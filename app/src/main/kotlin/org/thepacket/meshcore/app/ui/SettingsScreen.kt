@@ -216,10 +216,17 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             }
         }
 
-        // ---- Advanced ----
+        // ---- Experimental ----
         var pathHash by remember { mutableIntStateOf(0) }
-        SectionCard("Advanced") {
-            EnumDropdown("Path-hash mode", listOf("0", "1", "2"), pathHash) { pathHash = it }
+        SectionCard("Experimental") {
+            Text(
+                "Path-hash mode sets the path-hash size used when flooding. Higher values reduce " +
+                    "hash collisions in dense regions (e.g. Ottawa). The device doesn't report the " +
+                    "current value, so this control is write-only.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            EnumDropdown("Path-hash mode (0–2)", listOf("0", "1", "2"), pathHash) { pathHash = it }
             SaveRow { session.applyPathHashMode(pathHash) }
         }
 
