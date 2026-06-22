@@ -31,9 +31,7 @@ Connect to a companion device over BLE and:
   round markers, towers for repeaters, colour-by-type, screen-space **clustering** with
   count pills, node labels, and a tap-for-details sheet (all fields copy-pasteable).
 
-A note on privacy: the **Map is read-only**. The app never accesses the phone's GPS and
-never sets or changes this node's advertised position — it only displays what nodes already
-broadcast. The only runtime permissions requested are Bluetooth (and, on Android ≤ 11,
+The only runtime permissions requested are Bluetooth (and, on Android ≤ 11,
 location, which the OS requires for BLE scanning).
 
 ## Status
