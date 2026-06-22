@@ -9,6 +9,7 @@ composeBom = "2024.09.00"
 # that the MeshCore companion exposes.
 nordicBle = "2.7.5"
 coroutines = "1.8.1"
+osmdroid = "6.1.20"
 junit = "4.13.2"
 
 [libraries]
@@ -27,6 +28,7 @@ nordic-ble = { group = "no.nordicsemi.android", name = "ble", version.ref = "nor
 nordic-ble-ktx = { group = "no.nordicsemi.android", name = "ble-ktx", version.ref = "nordicBle" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

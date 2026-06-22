@@ -5,6 +5,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -47,6 +48,7 @@ fun MainScaffold(
         MainTab.Heard -> "Heard"
         MainTab.Packets -> "Packet monitor"
         MainTab.Stats -> "Statistics"
+        MainTab.Map -> "Map"
     }
     Scaffold(
         topBar = {
@@ -81,6 +83,12 @@ fun MainScaffold(
                     icon = { Icon(Icons.Default.BarChart, contentDescription = null) },
                     label = { Text("Stats") },
                 )
+                NavigationBarItem(
+                    selected = tab == MainTab.Map,
+                    onClick = { onTab(MainTab.Map) },
+                    icon = { Icon(Icons.Default.Map, contentDescription = null) },
+                    label = { Text("Map") },
+                )
             }
         },
     ) { pad ->
@@ -90,6 +98,7 @@ fun MainScaffold(
             MainTab.Heard -> HeardContent(heard, self, m)
             MainTab.Packets -> PacketMonitorContent(packets, m)
             MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, m)
+            MainTab.Map -> MapContent(self, contacts, heard, m)
         }
     }
 }
