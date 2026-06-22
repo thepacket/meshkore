@@ -77,11 +77,17 @@ data class BattAndStorage(
 /** Result of sending a text message (RESP_CODE_SENT). */
 data class SendResult(
     val sentFlood: Boolean,
-    /** Non-zero ACK id to correlate with a later [Event.SendConfirmed]; 0 if none expected. */
+    /** Non-zero ACK id to correlate with a later [Incoming.SendConfirmed]; 0 if none expected. */
     val expectedAck: Long,
+    /** Firmware's estimated round-trip timeout in ms — use to mark a message failed if no ack by then. */
+    val estTimeoutMs: Long,
 )
 
-/** A received text message (RESP_CODE_CONTACT_MSG_RECV / _V3). */
+/**
+ * A received text message (RESP_CODE_CONTACT_MSG_RECV / _V3, or the channel variants).
+ * [pathLen] is 0xFF when delivered direct, else the flood path length. [snrQ] is SNR×4
+ * (V3 frames only; 0 otherwise).
+ */
 data class IncomingMessage(
     val pubKeyPrefix: ByteArray,
     val pathLen: Int,
@@ -90,7 +96,12 @@ data class IncomingMessage(
     val text: String,
     val isChannel: Boolean,
     val channelIdx: Int = -1,
+    val snrQ: Int = 0,
 ) {
+    val snrDb: Double get() = snrQ / 4.0
+    val deliveredDirect: Boolean get() = pathLen == 0xFF
+    val keyPrefixHex: String get() = pubKeyPrefix.toHex()
+
     override fun equals(other: Any?) = other is IncomingMessage &&
         pubKeyPrefix.contentEquals(other.pubKeyPrefix) &&
         senderTimestamp == other.senderTimestamp && text == other.text

@@ -70,10 +70,11 @@ object Requests {
             .build()
     }
 
-    /** Channel (group) text message. Layout: [cmd, channelIdx, timestamp(u32), text...]. */
+    /** Channel (group) text message. Layout: [cmd, txtType, channelIdx, timestamp(u32), text...]. */
     fun sendChannelTextMessage(channelIdx: Int, text: String, timestamp: Long): ByteArray =
         FrameWriter()
             .u8(Cmd.SEND_CHANNEL_TXT_MSG)
+            .u8(TxtType.PLAIN)
             .u8(channelIdx)
             .u32(timestamp)
             .str(text)

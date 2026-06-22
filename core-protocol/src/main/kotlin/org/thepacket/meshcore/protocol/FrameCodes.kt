@@ -127,5 +127,12 @@ object Push {
     const val CONTACTS_FULL = 0x90
 }
 
+/** Text message types (TxtDataHelpers.h). */
+object TxtType {
+    const val PLAIN = 0
+    const val CLI_DATA = 1
+    const val SIGNED_PLAIN = 2
+}
+
 /** A code is a push (rather than a synchronous reply) iff its high bit is set. */
 fun isPush(code: Int): Boolean = (code and 0x80) != 0

@@ -19,8 +19,10 @@ sealed interface Incoming {
 
     /** One contact during a GET_CONTACTS sync (RESP_CODE_CONTACT). */
     data class ContactEntry(val contact: Contact) : Incoming
-    data object ContactsStart : Incoming
-    data object ContactsEnd : Incoming
+    /** Start of a contacts sync; [total] is the device's total contact count. */
+    data class ContactsStart(val total: Long) : Incoming
+    /** End of a contacts sync; [mostRecentLastMod] can be passed as `since` to the next GET_CONTACTS. */
+    data class ContactsEnd(val mostRecentLastMod: Long) : Incoming
 
     data class Sent(val result: SendResult) : Incoming
     data class DeviceTime(val epochSecs: Long) : Incoming
@@ -66,9 +68,9 @@ object FrameDecoder {
                 Resp.ERR -> Incoming.Err(if (r.remaining > 0) r.u8() else 0)
                 Resp.DISABLED -> Incoming.Disabled
                 Resp.SELF_INFO -> Incoming.Self(parseSelfInfo(r))
-                Resp.CONTACTS_START -> Incoming.ContactsStart
+                Resp.CONTACTS_START -> Incoming.ContactsStart(if (r.remaining >= 4) r.u32() else 0)
                 Resp.CONTACT -> Incoming.ContactEntry(parseContact(r))
-                Resp.END_OF_CONTACTS -> Incoming.ContactsEnd
+                Resp.END_OF_CONTACTS -> Incoming.ContactsEnd(if (r.remaining >= 4) r.u32() else 0)
                 Resp.SENT -> Incoming.Sent(parseSent(r))
                 Resp.CURR_TIME -> Incoming.DeviceTime(r.u32())
                 Resp.NO_MORE_MESSAGES -> Incoming.NoMoreMessages
@@ -113,11 +115,12 @@ object FrameDecoder {
         return Contact(pub, type, flags, outPathLen, outPath, name, lastAdvert, lat, lon, lastMod)
     }
 
-    // RESP_CODE_SENT: flood(1) expectedAck(u32)
+    // RESP_CODE_SENT (10 bytes): flood(1) expectedAck(u32) estTimeout(u32)
     private fun parseSent(r: FrameReader): SendResult {
         val flood = r.u8() != 0
         val ack = if (r.remaining >= 4) r.u32() else 0
-        return SendResult(flood, ack)
+        val est = if (r.remaining >= 4) r.u32() else 0
+        return SendResult(flood, ack, est)
     }
 
     // RESP_CODE_BATT_AND_STORAGE: battMv(u16) usedKb(u32) totalKb(u32)
@@ -162,22 +165,31 @@ object FrameDecoder {
         )
     }
 
-    // RESP_CODE_CONTACT_MSG_RECV(_V3): pubKeyPrefix(6) pathLen(1) txtType(1)
-    // senderTimestamp(u32) text(rest). Channel variant: channelIdx replaces the
-    // 6-byte prefix's role. TODO: confirm V3 deltas (SNR/extra header) against firmware.
+    // Message receive (confirmed against firmware MyMesh.cpp queueMessage/onChannelMessageRecv):
+    //   V3 frames prepend snr(i8, =SNR*4) + reserved1(1) + reserved2(1) after the code byte.
+    //   Contact: [v3 hdr] pubKeyPrefix(6) pathLen(1) txtType(1) ts(u32) [signer(4) if SIGNED] text(rest)
+    //   Channel: [v3 hdr] channelIdx(1) pathLen(1) txtType(1) ts(u32) text(rest)
     private fun parseMessage(r: FrameReader, channel: Boolean, v3: Boolean): IncomingMessage {
+        var snrQ = 0
+        if (v3) {
+            snrQ = r.i8()   // SNR * 4
+            r.u8(); r.u8()  // reserved1, reserved2
+        }
         return if (channel) {
             val idx = r.u8()
             val pathLen = r.u8()
             val txtType = r.u8()
             val ts = r.u32()
-            IncomingMessage(ByteArray(0), pathLen, txtType, ts, r.restAsString(), isChannel = true, channelIdx = idx)
+            IncomingMessage(ByteArray(0), pathLen, txtType, ts, r.restAsString(),
+                isChannel = true, channelIdx = idx, snrQ = snrQ)
         } else {
             val prefix = r.bytes(6)
             val pathLen = r.u8()
             val txtType = r.u8()
             val ts = r.u32()
-            IncomingMessage(prefix, pathLen, txtType, ts, r.restAsString(), isChannel = false)
+            if (txtType == TxtType.SIGNED_PLAIN && r.remaining >= 4) r.bytes(4) // signer prefix (extra)
+            IncomingMessage(prefix, pathLen, txtType, ts, r.restAsString(),
+                isChannel = false, snrQ = snrQ)
         }
     }
 

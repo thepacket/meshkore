@@ -108,15 +108,80 @@ class FrameCodecTest {
     }
 
     @Test fun decodeSentAndConfirm() {
-        val sent = FrameDecoder.decode(FrameWriter().u8(Resp.SENT).u8(0).u32(0xDEADBEEFL).build())
+        // RESP_CODE_SENT is 10 bytes: flood(1) expectedAck(u32) estTimeout(u32)
+        val sent = FrameDecoder.decode(FrameWriter().u8(Resp.SENT).u8(1).u32(0xDEADBEEFL).u32(8000).build())
         assertTrue(sent is Incoming.Sent)
-        assertEquals(0xDEADBEEFL, (sent as Incoming.Sent).result.expectedAck)
-        assertEquals(false, sent.result.sentFlood)
+        val res = (sent as Incoming.Sent).result
+        assertEquals(0xDEADBEEFL, res.expectedAck)
+        assertEquals(true, res.sentFlood)
+        assertEquals(8000L, res.estTimeoutMs)
 
         val conf = FrameDecoder.decode(FrameWriter().u8(Push.SEND_CONFIRMED).u32(0xDEADBEEFL).u32(1234).build())
         assertTrue(conf is Incoming.SendConfirmed)
         assertEquals(0xDEADBEEFL, (conf as Incoming.SendConfirmed).ackId)
         assertEquals(1234L, conf.roundTripMs)
+    }
+
+    @Test fun decodeContactMessageV3() {
+        // V3 contact message: code, snr(i8), res1, res2, prefix(6), pathLen, txtType, ts(u32), text
+        val prefix = byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 1, 2, 3, 4)
+        val frame = FrameWriter()
+            .u8(Resp.CONTACT_MSG_RECV_V3)
+            .u8(40)          // snr*4 = 10 dB
+            .u8(0).u8(0)     // reserved
+            .bytes(prefix)
+            .u8(0xFF)        // pathLen 0xFF = direct
+            .u8(TxtType.PLAIN)
+            .u32(1_700_000_000L)
+            .str("hello there")
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.Message)
+        val m = (d as Incoming.Message).message
+        assertEquals("hello there", m.text)
+        assertEquals(false, m.isChannel)
+        assertArrayEquals(prefix, m.pubKeyPrefix)
+        assertEquals(true, m.deliveredDirect)
+        assertEquals(10.0, m.snrDb, 1e-9)
+    }
+
+    @Test fun decodeChannelMessageV3() {
+        val frame = FrameWriter()
+            .u8(Resp.CHANNEL_MSG_RECV_V3)
+            .u8(0).u8(0).u8(0) // snr + reserved
+            .u8(2)             // channel idx
+            .u8(7)             // pathLen (flood, 7 hops)
+            .u8(TxtType.PLAIN)
+            .u32(1_700_000_000L)
+            .str("hi channel")
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.Message)
+        val m = (d as Incoming.Message).message
+        assertEquals("hi channel", m.text)
+        assertTrue(m.isChannel)
+        assertEquals(2, m.channelIdx)
+        assertEquals(false, m.deliveredDirect)
+    }
+
+    @Test fun decodeContactsStartAndEnd() {
+        val start = FrameDecoder.decode(FrameWriter().u8(Resp.CONTACTS_START).u32(42).build())
+        assertTrue(start is Incoming.ContactsStart)
+        assertEquals(42L, (start as Incoming.ContactsStart).total)
+
+        val end = FrameDecoder.decode(FrameWriter().u8(Resp.END_OF_CONTACTS).u32(1_700_000_500L).build())
+        assertTrue(end is Incoming.ContactsEnd)
+        assertEquals(1_700_000_500L, (end as Incoming.ContactsEnd).mostRecentLastMod)
+    }
+
+    @Test fun channelSendIncludesTxtTypeByte() {
+        val f = Requests.sendChannelTextMessage(channelIdx = 1, text = "yo", timestamp = 0x01020304)
+        val r = FrameReader(f)
+        assertEquals(Cmd.SEND_CHANNEL_TXT_MSG, r.u8())
+        assertEquals(TxtType.PLAIN, r.u8())  // the byte that was missing
+        assertEquals(1, r.u8())              // channel idx
+        assertEquals(0x01020304L, r.u32())
+        assertEquals("yo", r.restAsString())
     }
 
     @Test fun decodeAdvertPushCarries32BytePubkey() {

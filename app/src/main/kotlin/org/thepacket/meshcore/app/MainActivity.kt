@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -11,6 +12,8 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.thepacket.meshcore.app.ui.ConnectScreen
+import org.thepacket.meshcore.app.ui.ConversationScreen
+import org.thepacket.meshcore.app.ui.HomeScreen
 import org.thepacket.meshcore.app.ui.MeshCoreTheme
 
 class MainActivity : ComponentActivity() {
@@ -30,23 +33,36 @@ class MainActivity : ComponentActivity() {
         setContent {
             val vm: ConnectionViewModel = viewModel()
             val state by vm.ui.collectAsStateWithLifecycle()
+            val self by vm.session.self.collectAsStateWithLifecycle()
+            val contacts by vm.session.contacts.collectAsStateWithLifecycle()
+            val messages by vm.session.messages.collectAsStateWithLifecycle()
 
-            val permLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+            val permLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
-            ) { grants ->
-                if (grants.values.all { it }) vm.startScan()
-            }
+            ) { grants -> if (grants.values.all { it }) vm.startScan() }
 
             MeshCoreTheme {
-                ConnectScreen(
-                    state = state,
-                    onScanToggle = {
-                        if (state.scanning) vm.stopScan()
-                        else permLauncher.launch(blePermissions)
-                    },
-                    onConnect = vm::connect,
-                    onDisconnect = vm::disconnect,
-                )
+                when (val screen = state.screen) {
+                    is Screen.Connect -> ConnectScreen(
+                        state = state,
+                        onScanToggle = {
+                            if (state.scanning) vm.stopScan() else permLauncher.launch(blePermissions)
+                        },
+                        onConnect = vm::connect,
+                    )
+                    is Screen.Home -> HomeScreen(
+                        self = self,
+                        contacts = contacts,
+                        onOpenConversation = vm::openConversation,
+                        onDisconnect = vm::disconnect,
+                    )
+                    is Screen.Conversation -> ConversationScreen(
+                        title = screen.title,
+                        messages = messages[screen.conversationId].orEmpty(),
+                        onBack = vm::backToHome,
+                        onSend = { text -> vm.sendMessage(screen.conversationId, text) },
+                    )
+                }
             }
         }
     }

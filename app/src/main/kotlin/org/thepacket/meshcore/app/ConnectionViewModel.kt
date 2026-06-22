@@ -13,27 +13,28 @@ import org.thepacket.meshcore.ble.CompanionScanner
 import org.thepacket.meshcore.ble.LinkState
 import org.thepacket.meshcore.ble.NordicMeshCoreLink
 import org.thepacket.meshcore.ble.ScannedDevice
-import org.thepacket.meshcore.protocol.Incoming
-import org.thepacket.meshcore.protocol.Requests
-import org.thepacket.meshcore.protocol.SelfInfo
 
-/**
- * Drives the P0 flow: scan for companions → connect → APP_START handshake →
- * show the device's own [SelfInfo]. The view-model owns the link and decodes
- * the handshake reply; everything else (settings, chat, …) builds on this.
- */
+/** Which screen the UI is showing. */
+sealed interface Screen {
+    data object Connect : Screen
+    data object Home : Screen
+    data class Conversation(val conversationId: String, val title: String) : Screen
+}
+
+/** Connection / scanning state (chat state lives in [MeshSession]). */
 data class UiState(
     val scanning: Boolean = false,
     val devices: List<ScannedDevice> = emptyList(),
     val linkState: LinkState = LinkState.Disconnected,
-    val self: SelfInfo? = null,
     val error: String? = null,
+    val screen: Screen = Screen.Connect,
 )
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     private val scanner = CompanionScanner(app)
     private val link = NordicMeshCoreLink(app)
+    val session = MeshSession(link, viewModelScope)
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -42,10 +43,16 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            link.state.collect { s -> _ui.update { it.copy(linkState = s) } }
-        }
-        viewModelScope.launch {
-            link.incoming.collect(::onFrame)
+            link.state.collect { s ->
+                _ui.update { st ->
+                    val screen = when {
+                        s == LinkState.Connected && st.screen is Screen.Connect -> Screen.Home
+                        s == LinkState.Disconnected || s == LinkState.Failed -> Screen.Connect
+                        else -> st.screen
+                    }
+                    st.copy(linkState = s, screen = screen)
+                }
+            }
         }
     }
 
@@ -78,8 +85,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 link.connect(d.device)
-                // Handshake: first frame after connect; reply is RESP_CODE_SELF_INFO.
-                link.send(Requests.appStart())
+                session.start() // APP_START handshake -> self info -> contacts sync
             } catch (e: Exception) {
                 _ui.update { it.copy(error = e.message) }
             }
@@ -88,15 +94,24 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun disconnect() {
         viewModelScope.launch { runCatching { link.disconnect() } }
-        _ui.update { it.copy(self = null) }
+        session.reset()
+        _ui.update { it.copy(screen = Screen.Connect) }
     }
 
-    private fun onFrame(frame: Incoming) {
-        when (frame) {
-            is Incoming.Self -> _ui.update { it.copy(self = frame.info, error = null) }
-            is Incoming.Err -> _ui.update { it.copy(error = "device error ${frame.code}") }
-            Incoming.Disabled -> _ui.update { it.copy(error = "companion mode disabled on device") }
-            else -> Unit // other frames handled by feature view-models later
+    /** Route a send by conversation id: "ch:N" → channel, else → the matching contact DM. */
+    fun sendMessage(conversationId: String, text: String) {
+        if (conversationId.startsWith("ch:")) {
+            val idx = conversationId.removePrefix("ch:").toIntOrNull() ?: return
+            session.sendChannel(idx, text)
+        } else {
+            val contact = session.contacts.value.firstOrNull { Conversation.dmId(it) == conversationId } ?: return
+            session.sendDirect(contact, text)
         }
     }
+
+    // ---- navigation ----
+    fun openConversation(id: String, title: String) =
+        _ui.update { it.copy(screen = Screen.Conversation(id, title)) }
+
+    fun backToHome() = _ui.update { it.copy(screen = Screen.Home) }
 }
