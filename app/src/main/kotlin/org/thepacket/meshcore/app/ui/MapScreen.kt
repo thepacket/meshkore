@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -356,6 +357,7 @@ private fun NodeDetailSheet(node: MapNode, self: SelfInfo?, onDismiss: () -> Uni
     val h = node.heard
     val s = node.self
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        SelectionContainer {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -398,6 +400,7 @@ private fun NodeDetailSheet(node: MapNode, self: SelfInfo?, onDismiss: () -> Uni
                     style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                 Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
             }
+        }
         }
     }
 }
