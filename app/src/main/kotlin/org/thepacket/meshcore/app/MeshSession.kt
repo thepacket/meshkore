@@ -25,11 +25,16 @@ class MeshSession(
     private val link: MeshCoreLink,
     private val scope: CoroutineScope,
 ) {
+    private companion object { const val MAX_CHANNELS = 8 } // safety cap when probing channel slots
+
     private val _self = MutableStateFlow<SelfInfo?>(null)
     val self: StateFlow<SelfInfo?> = _self.asStateFlow()
 
     private val _contacts = MutableStateFlow<List<Contact>>(emptyList())
     val contacts: StateFlow<List<Contact>> = _contacts.asStateFlow()
+
+    private val _channels = MutableStateFlow<List<ChannelEntry>>(emptyList())
+    val channels: StateFlow<List<ChannelEntry>> = _channels.asStateFlow()
 
     /** conversationId -> messages (oldest first). */
     private val _messages = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
@@ -37,6 +42,8 @@ class MeshSession(
 
     // --- internal sync/send bookkeeping ---
     private val contactAccumulator = mutableListOf<Contact>()
+    private val channelAccumulator = mutableListOf<ChannelEntry>()
+    private var enumeratingChannels = false
     private var draining = false
     private var localIdSeq = 0L
     /** Outgoing messages awaiting their immediate SENT/OK reply, FIFO (link is sequential). */
@@ -54,9 +61,12 @@ class MeshSession(
     fun reset() {
         _self.value = null
         _contacts.value = emptyList()
+        _channels.value = emptyList()
         _messages.value = emptyMap()
         contactAccumulator.clear()
+        channelAccumulator.clear()
         pendingSends.clear()
+        enumeratingChannels = false
         draining = false
     }
 
@@ -104,7 +114,17 @@ class MeshSession(
             is Incoming.ContactsEnd -> {
                 _contacts.value = contactAccumulator.sortedByDescending { it.lastAdvert }
                 contactAccumulator.clear()
-                startDrain() // pull any queued messages
+                startChannelEnumeration() // then drains messages when done
+            }
+
+            is Incoming.ChannelInfo -> {
+                channelAccumulator.add(ChannelEntry(f.index, f.name))
+                _channels.value = channelAccumulator.toList()
+                if (f.index + 1 < MAX_CHANNELS) {
+                    scope.launch { link.send(Requests.getChannel(f.index + 1)) }
+                } else {
+                    finishChannelEnumeration()
+                }
             }
 
             Incoming.MsgWaiting -> startDrain()
@@ -117,11 +137,25 @@ class MeshSession(
 
             is Incoming.Sent -> onSentReply(f.result.expectedAck, f.result.estTimeoutMs)
             Incoming.Ok -> onSendAcceptedNoAck()
-            is Incoming.Err -> onSendFailed()
+            is Incoming.Err ->
+                if (enumeratingChannels) finishChannelEnumeration() // err = no more channel slots
+                else onSendFailed()
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
             else -> Unit // adverts/status/etc. handled elsewhere later
         }
+    }
+
+    private fun startChannelEnumeration() {
+        enumeratingChannels = true
+        channelAccumulator.clear()
+        scope.launch { link.send(Requests.getChannel(0)) }
+    }
+
+    private fun finishChannelEnumeration() {
+        enumeratingChannels = false
+        if (channelAccumulator.isEmpty()) _channels.value = listOf(ChannelEntry(0, "Public"))
+        startDrain() // now pull any queued messages
     }
 
     private fun startDrain() {

@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
             val vm: ConnectionViewModel = viewModel()
             val state by vm.ui.collectAsStateWithLifecycle()
             val self by vm.session.self.collectAsStateWithLifecycle()
+            val channels by vm.session.channels.collectAsStateWithLifecycle()
             val contacts by vm.session.contacts.collectAsStateWithLifecycle()
             val messages by vm.session.messages.collectAsStateWithLifecycle()
 
@@ -52,6 +53,7 @@ class MainActivity : ComponentActivity() {
                     )
                     is Screen.Home -> HomeScreen(
                         self = self,
+                        channels = channels,
                         contacts = contacts,
                         onOpenConversation = vm::openConversation,
                         onDisconnect = vm::disconnect,

@@ -41,6 +41,7 @@ import kotlin.math.abs
 @Composable
 fun HomeScreen(
     self: SelfInfo?,
+    channels: List<org.thepacket.meshcore.app.ChannelEntry>,
     contacts: List<Contact>,
     onOpenConversation: (id: String, title: String) -> Unit,
     onDisconnect: () -> Unit,
@@ -66,13 +67,13 @@ fun HomeScreen(
                 Text("Channels", style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
             }
-            item {
+            items(channels, key = { "ch:${it.index}" }) { ch ->
                 ConversationRow(
                     icon = Icons.Default.Campaign,
                     tint = MaterialTheme.colorScheme.tertiary,
-                    title = "Public",
-                    subtitle = "Public channel",
-                    onClick = { onOpenConversation(org.thepacket.meshcore.app.Conversation.channelId(0), "Public") },
+                    title = ch.displayName,
+                    subtitle = "Channel ${ch.index}",
+                    onClick = { onOpenConversation(org.thepacket.meshcore.app.Conversation.channelId(ch.index), ch.displayName) },
                 )
             }
             item {

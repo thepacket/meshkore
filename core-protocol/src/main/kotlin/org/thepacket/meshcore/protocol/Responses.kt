@@ -31,6 +31,12 @@ sealed interface Incoming {
 
     data class Message(val message: IncomingMessage) : Incoming
 
+    /** Reply to CMD_GET_CHANNEL (RESP_CODE_CHANNEL_INFO). */
+    data class ChannelInfo(val index: Int, val name: String, val secret: ByteArray) : Incoming {
+        override fun equals(other: Any?) = other is ChannelInfo && index == other.index
+        override fun hashCode() = index
+    }
+
     // ---- pushes ----
     data class AdvertHeard(val publicKey: ByteArray) : Incoming {
         override fun equals(other: Any?) = other is AdvertHeard && publicKey.contentEquals(other.publicKey)
@@ -79,6 +85,7 @@ object FrameDecoder {
                     Incoming.Message(parseMessage(r, channel = false, v3 = code == Resp.CONTACT_MSG_RECV_V3))
                 Resp.CHANNEL_MSG_RECV, Resp.CHANNEL_MSG_RECV_V3 ->
                     Incoming.Message(parseMessage(r, channel = true, v3 = code == Resp.CHANNEL_MSG_RECV_V3))
+                Resp.CHANNEL_INFO -> Incoming.ChannelInfo(r.u8(), r.cstr(32), r.bytes(minOf(16, r.remaining)))
 
                 Push.ADVERT -> Incoming.AdvertHeard(r.bytes(minOf(32, r.remaining)))
                 Push.PATH_UPDATED -> Incoming.PathUpdated(r.bytes(minOf(32, r.remaining)))

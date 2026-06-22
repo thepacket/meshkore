@@ -3,6 +3,11 @@ package org.thepacket.meshcore.app
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.toHex
 
+/** A group channel slot enumerated from the device. */
+data class ChannelEntry(val index: Int, val name: String) {
+    val displayName: String get() = name.ifBlank { if (index == 0) "Public" else "Channel $index" }
+}
+
 /** Delivery lifecycle of a chat message. */
 enum class MsgStatus { Sending, Sent, Delivered, Failed, Received }
 

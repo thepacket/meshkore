@@ -174,6 +174,27 @@ class FrameCodecTest {
         assertEquals(1_700_000_500L, (end as Incoming.ContactsEnd).mostRecentLastMod)
     }
 
+    @Test fun decodeChannelInfo() {
+        val secret = ByteArray(16) { it.toByte() }
+        val frame = FrameWriter()
+            .u8(Resp.CHANNEL_INFO)
+            .u8(1)
+            .bytes("test-lp".toByteArray().copyOf(32)) // 32-byte NUL-padded name
+            .bytes(secret)
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.ChannelInfo)
+        val ci = d as Incoming.ChannelInfo
+        assertEquals(1, ci.index)
+        assertEquals("test-lp", ci.name)
+        assertArrayEquals(secret, ci.secret)
+    }
+
+    @Test fun getChannelRequestShape() {
+        val f = Requests.getChannel(2)
+        assertArrayEquals(byteArrayOf(Cmd.GET_CHANNEL.toByte(), 2), f)
+    }
+
     @Test fun channelSendIncludesTxtTypeByte() {
         val f = Requests.sendChannelTextMessage(channelIdx = 1, text = "yo", timestamp = 0x01020304)
         val r = FrameReader(f)

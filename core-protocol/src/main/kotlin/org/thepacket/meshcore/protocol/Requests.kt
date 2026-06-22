@@ -41,6 +41,10 @@ object Requests {
 
     fun syncNextMessage(): ByteArray = FrameWriter().u8(Cmd.SYNC_NEXT_MESSAGE).build()
 
+    /** Fetch one channel slot's info (reply RESP_CODE_CHANNEL_INFO, or ERR if the slot is empty). */
+    fun getChannel(index: Int): ByteArray =
+        FrameWriter().u8(Cmd.GET_CHANNEL).u8(index).build()
+
     fun sendSelfAdvert(flood: Boolean): ByteArray =
         FrameWriter().u8(Cmd.SEND_SELF_ADVERT).u8(if (flood) 1 else 0).build()
 
