@@ -47,7 +47,7 @@ fun MapContent(
 ) {
     val nodes = remember(self, contacts, heard) { collectNodes(self, contacts, heard) }
     // Caches so re-clustering on pan/zoom reuses marker bitmaps.
-    val nodeIcons = remember { mutableMapOf<String, Drawable>() }
+    val nodeIcons = remember { mutableMapOf<String, NodeIcon>() }
     val clusterIcons = remember { mutableMapOf<Int, Drawable>() }
     val holder = remember { MapHolder() }
     holder.nodes = nodes
@@ -109,7 +109,7 @@ private class MapHolder {
 private fun rebuildOverlays(
     map: MapView,
     nodes: List<MapNode>,
-    nodeIcons: MutableMap<String, Drawable>,
+    nodeIcons: MutableMap<String, NodeIcon>,
     clusterIcons: MutableMap<Int, Drawable>,
 ) {
     map.overlays.clear()
@@ -130,11 +130,11 @@ private fun rebuildOverlays(
         }
         if (group.size == 1) {
             val n = nodes[i]
-            val icon = nodeIcons.getOrPut(nodeKey(n)) { makeNodeIcon(res, n) }
+            val ni = nodeIcons.getOrPut(nodeKey(n)) { makeNodeIcon(res, n) }
             map.overlays.add(Marker(map).apply {
                 position = GeoPoint(n.lat, n.lon)
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                setIcon(icon)
+                setAnchor(Marker.ANCHOR_CENTER, ni.anchorV) // geo point sits at the circle centre
+                setIcon(ni.drawable)
                 title = if (n.isSelf) "${n.name} (this node)" else n.name
                 subDescription = "%.5f, %.5f".format(n.lat, n.lon)
             })
@@ -157,12 +157,15 @@ private fun rebuildOverlays(
     map.invalidate()
 }
 
-private const val CLUSTER_RADIUS_DP = 44f
+private const val CLUSTER_RADIUS_DP = 26f
+
+/** A node marker plus the vertical anchor that puts its circle (not its label) on the geo point. */
+private class NodeIcon(val drawable: Drawable, val anchorV: Float)
 
 private fun dist(a: Point, b: Point): Double =
     hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble())
 
-private fun nodeKey(n: MapNode): String = "${n.type}|${n.isSelf}|${initialOf(n.name)}"
+private fun nodeKey(n: MapNode): String = "${n.type}|${n.isSelf}|${n.name}"
 
 private fun initialOf(name: String): Char =
     name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercaseChar() ?: '?'
@@ -179,42 +182,64 @@ private fun nodeColor(type: Int, isSelf: Boolean): Int = when {
 
 // ---- icon rendering -------------------------------------------------------
 
-private fun makeNodeIcon(res: Resources, n: MapNode): Drawable {
+private fun makeNodeIcon(res: Resources, n: MapNode): NodeIcon {
     val d = res.displayMetrics.density
     val diameter = ((if (n.isSelf) 30f else 26f) * d)
-    val pad = 2f * d
-    val size = (diameter + pad * 2).toInt()
-    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val topPad = 2f * d
+    val gap = 3f * d
+
+    // Label below the circle (always shown for un-clustered nodes).
+    val label = n.name.let { if (it.length > 16) it.take(15) + "…" else it }
+    val tLabel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt(); textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); textSize = 11f * d
+    }
+    val fm = tLabel.fontMetrics
+    val labelTextH = fm.descent - fm.ascent
+    val labelPadH = 5f * d; val labelPadV = 2.5f * d
+    val labelW = tLabel.measureText(label) + labelPadH * 2
+    val labelH = labelTextH + labelPadV * 2
+
+    val width = maxOf(diameter + 4f * d, labelW).toInt()
+    val height = (topPad + diameter + gap + labelH).toInt()
+    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
     val c = Canvas(bmp)
-    val cx = size / 2f; val cy = size / 2f; val r = diameter / 2f
+    val cx = width / 2f
+    val circleCy = topPad + diameter / 2f
+    val r = diameter / 2f
     val p = Paint(Paint.ANTI_ALIAS_FLAG)
 
     // white backing ring then coloured fill
-    p.color = 0xFFFFFFFF.toInt(); c.drawCircle(cx, cy, r, p)
-    p.color = nodeColor(n.type, n.isSelf); c.drawCircle(cx, cy, r - 1.5f * d, p)
+    p.color = 0xFFFFFFFF.toInt(); c.drawCircle(cx, circleCy, r, p)
+    p.color = nodeColor(n.type, n.isSelf); c.drawCircle(cx, circleCy, r - 1.5f * d, p)
     if (n.isSelf) { // extra ring to stand out
         p.style = Paint.Style.STROKE; p.strokeWidth = 2f * d; p.color = 0xFFFFFFFF.toInt()
-        c.drawCircle(cx, cy, r - 3.5f * d, p); p.style = Paint.Style.FILL
+        c.drawCircle(cx, circleCy, r - 3.5f * d, p); p.style = Paint.Style.FILL
     }
+    if (n.type == ContactType.REPEATER) drawTower(c, cx, circleCy, diameter, d)
+    else drawInitial(c, cx, circleCy, diameter, initialOf(n.name))
 
-    if (n.type == ContactType.REPEATER) drawTower(c, cx, cy, diameter, d)
-    else drawInitial(c, cx, cy, diameter, initialOf(n.name))
-    return BitmapDrawable(res, bmp)
+    // label pill
+    val labelTop = circleCy + r + gap
+    val rect = RectF(cx - labelW / 2f, labelTop, cx + labelW / 2f, labelTop + labelH)
+    p.color = 0xE61E2933.toInt(); c.drawRoundRect(rect, 4f * d, 4f * d, p)
+    c.drawText(label, cx, labelTop + labelPadV - fm.ascent, tLabel)
+
+    return NodeIcon(BitmapDrawable(res, bmp), anchorV = circleCy / height)
 }
 
-/** Broadcast tower glyph (mast + signal arcs), white, centred in the circle. */
+/** Broadcast tower glyph (mast + signal arcs), white, vertically centred at [cy]. */
 private fun drawTower(c: Canvas, cx: Float, cy: Float, diameter: Float, d: Float) {
     val white = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFFFFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 1.8f * d
         strokeCap = Paint.Cap.ROUND
     }
-    val tipY = cy - diameter * 0.20f
-    // mast
-    c.drawLine(cx, tipY, cx, cy + diameter * 0.26f, white)
-    // tip
+    // glyph spans tip-arcs (top) to mast bottom; chosen so its midpoint == cy
+    val tipY = cy - diameter * 0.06f
+    val mastBottom = tipY + diameter * 0.40f
+    c.drawLine(cx, tipY, cx, mastBottom, white)
     val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
     c.drawCircle(cx, tipY, 1.7f * d, fill)
-    // signal arcs each side of the tip
     for (k in 1..2) {
         val rad = diameter * (0.10f + 0.09f * k)
         val box = RectF(cx - rad, tipY - rad, cx + rad, tipY + rad)
