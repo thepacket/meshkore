@@ -1,6 +1,7 @@
 package org.thepacket.meshcore.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,16 +31,23 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.app.haversineKm
+import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.SelfInfo
 
 @Composable
-fun HeardContent(heard: List<HeardEntry>, self: SelfInfo?, modifier: Modifier = Modifier) {
+fun HeardContent(
+    heard: List<HeardEntry>,
+    contacts: List<Contact>,
+    self: SelfInfo?,
+    modifier: Modifier = Modifier,
+) {
     if (heard.isEmpty()) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No stations heard yet…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
         return
     }
+    var selected by remember { mutableStateOf<HeardEntry?>(null) }
     val selfHasGps = self != null && (self.advLat != 0 || self.advLon != 0)
     LazyColumn(
         modifier.fillMaxSize(),
@@ -45,14 +57,27 @@ fun HeardContent(heard: List<HeardEntry>, self: SelfInfo?, modifier: Modifier = 
         items(heard, key = { it.pubKeyHex }) { h ->
             val distanceKm = if (selfHasGps && h.hasGps)
                 haversineKm(self!!.advLat / 1e6, self.advLon / 1e6, h.latDeg, h.lonDeg) else null
-            HeardRow(h, distanceKm)
+            HeardRow(h, distanceKm) { selected = h }
         }
+    }
+
+    selected?.let { h ->
+        val contact = contacts.firstOrNull { h.pubKeyHex.startsWith(it.keyPrefixHex) }
+        NodeDetailSheet(
+            name = h.name,
+            type = contact?.type ?: h.type,
+            isSelf = false,
+            contact = contact,
+            heard = h,
+            self = self,
+            onDismiss = { selected = null },
+        )
     }
 }
 
 @Composable
-private fun HeardRow(h: HeardEntry, distanceKm: Double?) {
-    Card(Modifier.fillMaxWidth()) {
+private fun HeardRow(h: HeardEntry, distanceKm: Double?, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,

@@ -9,21 +9,12 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,15 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import org.thepacket.meshcore.app.haversineKm
-import org.thepacket.meshcore.protocol.toHex
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
@@ -132,7 +116,11 @@ fun MapContent(
         }
 
         selected?.let { node ->
-            NodeDetailSheet(node = node, self = self, onDismiss = { selected = null })
+            NodeDetailSheet(
+                name = node.name, type = node.type, isSelf = node.isSelf,
+                contact = node.contact, heard = node.heard, self = self,
+                onDismiss = { selected = null },
+            )
         }
     }
 }
@@ -341,87 +329,3 @@ private fun collectNodes(self: SelfInfo?, contacts: List<Contact>, heard: List<H
     }
     return list
 }
-
-private fun typeLabel(type: Int) = when (type) {
-    ContactType.CHAT -> "Contact"
-    ContactType.REPEATER -> "Repeater"
-    ContactType.ROOM -> "Room"
-    ContactType.SENSOR -> "Sensor"
-    else -> "Node"
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun NodeDetailSheet(node: MapNode, self: SelfInfo?, onDismiss: () -> Unit) {
-    val c = node.contact
-    val h = node.heard
-    val s = node.self
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
-        SelectionContainer {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                node.name + if (node.isSelf) "  (this node)" else "",
-                style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
-            )
-            Text(typeLabel(node.type), color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.labelLarge)
-            HorizontalDivider(Modifier.padding(vertical = 6.dp))
-
-            kv("Coordinates", "%.5f, %.5f".format(node.lat, node.lon))
-
-            // distance from us, when both ends have a position
-            if (!node.isSelf && self != null && (self.advLat != 0 || self.advLon != 0)) {
-                val km = haversineKm(self.advLat / 1e6, self.advLon / 1e6, node.lat, node.lon)
-                kv("Distance", if (km < 1) "${(km * 1000).toInt()} m" else "%.1f km".format(km))
-            }
-
-            h?.snrDb?.let { kv("SNR", "$it dB") }
-            h?.rssi?.let { kv("RSSI", "$it dBm") }
-            h?.let { kv("Last heard", ageLabel(it.lastHeardMs)) }
-            c?.let { if (it.lastAdvert > 0) kv("Last advert", epoch(it.lastAdvert)) }
-            c?.let { if (it.outPathLen in 0..63) kv("Path", "${it.outPathLen} hop(s)") else kv("Path", "flood / unknown") }
-
-            // radio config — only meaningful for our own node
-            s?.let {
-                HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                kv("Frequency", "${it.freqMhz} MHz")
-                kv("Bandwidth", "${it.bwKhz} kHz")
-                kv("Spreading factor", "SF${it.radioSf}")
-                kv("Coding rate", "4/${it.radioCr}")
-                kv("TX power", "${it.txPower} dBm")
-            }
-
-            val key = c?.publicKey?.toHex() ?: s?.publicKey?.toHex() ?: h?.pubKeyHex
-            key?.let {
-                Text("Public key", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
-                Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        }
-    }
-}
-
-@Composable
-private fun kv(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        Text(value, fontFamily = FontFamily.Monospace)
-    }
-}
-
-private fun ageLabel(ms: Long): String {
-    val secs = ((System.currentTimeMillis() - ms) / 1000).coerceAtLeast(0)
-    return when {
-        secs < 60 -> "${secs}s ago"
-        secs < 3600 -> "${secs / 60}m ago"
-        secs < 86400 -> "${secs / 3600}h ago"
-        else -> "${secs / 86400}d ago"
-    }
-}
-
-private fun epoch(sec: Long): String =
-    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(sec * 1000))
