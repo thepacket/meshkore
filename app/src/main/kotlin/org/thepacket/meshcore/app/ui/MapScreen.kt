@@ -9,18 +9,36 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import org.thepacket.meshcore.app.haversineKm
+import org.thepacket.meshcore.protocol.toHex
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
@@ -35,8 +53,20 @@ import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
 import kotlin.math.hypot
 
-/** A node to plot. Positions come only from what nodes already advertise (read-only). */
-data class MapNode(val name: String, val lat: Double, val lon: Double, val type: Int, val isSelf: Boolean)
+/**
+ * A node to plot. Positions come only from what nodes already advertise (read-only).
+ * Carries the source records so a tapped marker can show everything we know.
+ */
+data class MapNode(
+    val name: String,
+    val lat: Double,
+    val lon: Double,
+    val type: Int,
+    val isSelf: Boolean,
+    val contact: Contact? = null,
+    val heard: HeardEntry? = null,
+    val self: SelfInfo? = null,
+)
 
 @Composable
 fun MapContent(
@@ -51,6 +81,8 @@ fun MapContent(
     val clusterIcons = remember { mutableMapOf<Int, Drawable>() }
     val holder = remember { MapHolder() }
     holder.nodes = nodes
+    var selected by remember { mutableStateOf<MapNode?>(null) }
+    holder.onSelect = { selected = it }
 
     Box(modifier.fillMaxSize()) {
         AndroidView(
@@ -64,16 +96,16 @@ fun MapContent(
                     // Re-cluster as the viewport changes (clusters depend on screen positions).
                     addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
-                            rebuildOverlays(this@apply, holder.nodes, nodeIcons, clusterIcons); return false
+                            rebuildOverlays(this@apply, holder.nodes, nodeIcons, clusterIcons, holder.onSelect); return false
                         }
                         override fun onZoom(event: ZoomEvent?): Boolean {
-                            rebuildOverlays(this@apply, holder.nodes, nodeIcons, clusterIcons); return false
+                            rebuildOverlays(this@apply, holder.nodes, nodeIcons, clusterIcons, holder.onSelect); return false
                         }
                     })
                 }
             },
             update = { map ->
-                rebuildOverlays(map, nodes, nodeIcons, clusterIcons)
+                rebuildOverlays(map, nodes, nodeIcons, clusterIcons, holder.onSelect)
                 if (!holder.centered && nodes.isNotEmpty()) {
                     map.controller.setCenter(GeoPoint(nodes[0].lat, nodes[0].lon))
                     if (map.zoomLevelDouble < 5.0) map.controller.setZoom(11.0)
@@ -97,12 +129,17 @@ fun MapContent(
                 )
             }
         }
+
+        selected?.let { node ->
+            NodeDetailSheet(node = node, self = self, onDismiss = { selected = null })
+        }
     }
 }
 
 private class MapHolder {
     var nodes: List<MapNode> = emptyList()
     var centered = false
+    var onSelect: (MapNode) -> Unit = {}
 }
 
 /** Greedy screen-space clustering: nodes within [CLUSTER_RADIUS_DP] merge into a count pill. */
@@ -111,6 +148,7 @@ private fun rebuildOverlays(
     nodes: List<MapNode>,
     nodeIcons: MutableMap<String, NodeIcon>,
     clusterIcons: MutableMap<Int, Drawable>,
+    onSelect: (MapNode) -> Unit,
 ) {
     map.overlays.clear()
     if (nodes.isEmpty()) { map.invalidate(); return }
@@ -135,8 +173,7 @@ private fun rebuildOverlays(
                 position = GeoPoint(n.lat, n.lon)
                 setAnchor(Marker.ANCHOR_CENTER, ni.anchorV) // geo point sits at the circle centre
                 setIcon(ni.drawable)
-                title = if (n.isSelf) "${n.name} (this node)" else n.name
-                subDescription = "%.5f, %.5f".format(n.lat, n.lon)
+                setOnMarkerClickListener { _, _ -> onSelect(n); true } // show our own detail sheet
             })
         } else {
             val lat = group.sumOf { nodes[it].lat } / group.size
@@ -282,20 +319,106 @@ private fun collectNodes(self: SelfInfo?, contacts: List<Contact>, heard: List<H
     val byKey = LinkedHashMap<String, MapNode>()
     contacts.forEach { c ->
         if (c.gpsLat != 0 || c.gpsLon != 0) {
-            byKey[c.keyPrefixHex] =
-                MapNode(c.name.ifBlank { c.keyPrefixHex }, c.gpsLat / 1e6, c.gpsLon / 1e6, c.type, false)
+            val h = heard.firstOrNull { it.pubKeyHex.startsWith(c.keyPrefixHex) } // attach signal if heard
+            byKey[c.keyPrefixHex] = MapNode(
+                c.name.ifBlank { c.keyPrefixHex }, c.gpsLat / 1e6, c.gpsLon / 1e6, c.type, false,
+                contact = c, heard = h,
+            )
         }
     }
     heard.forEach { h ->
-        if (h.hasGps && !byKey.containsKey(h.pubKeyHex.take(12))) {
-            byKey[h.pubKeyHex] = MapNode(h.name, h.latDeg, h.lonDeg, h.type, false)
+        val coveredByContact = contacts.any { h.pubKeyHex.startsWith(it.keyPrefixHex) && (it.gpsLat != 0 || it.gpsLon != 0) }
+        if (h.hasGps && !coveredByContact && !byKey.containsKey(h.pubKeyHex)) {
+            byKey[h.pubKeyHex] = MapNode(h.name, h.latDeg, h.lonDeg, h.type, false, heard = h)
         }
     }
     val list = byKey.values.toMutableList()
     // Show our own node only if it already advertises a position (read-only; we never set it).
     if (self != null && (self.advLat != 0 || self.advLon != 0)) {
         list.add(0, MapNode(self.name.ifBlank { "This node" }, self.advLat / 1e6, self.advLon / 1e6,
-            ContactType.CHAT, true))
+            ContactType.CHAT, true, self = self))
     }
     return list
 }
+
+private fun typeLabel(type: Int) = when (type) {
+    ContactType.CHAT -> "Contact"
+    ContactType.REPEATER -> "Repeater"
+    ContactType.ROOM -> "Room"
+    ContactType.SENSOR -> "Sensor"
+    else -> "Node"
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NodeDetailSheet(node: MapNode, self: SelfInfo?, onDismiss: () -> Unit) {
+    val c = node.contact
+    val h = node.heard
+    val s = node.self
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                node.name + if (node.isSelf) "  (this node)" else "",
+                style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+            )
+            Text(typeLabel(node.type), color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelLarge)
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+
+            kv("Coordinates", "%.5f, %.5f".format(node.lat, node.lon))
+
+            // distance from us, when both ends have a position
+            if (!node.isSelf && self != null && (self.advLat != 0 || self.advLon != 0)) {
+                val km = haversineKm(self.advLat / 1e6, self.advLon / 1e6, node.lat, node.lon)
+                kv("Distance", if (km < 1) "${(km * 1000).toInt()} m" else "%.1f km".format(km))
+            }
+
+            h?.snrDb?.let { kv("SNR", "$it dB") }
+            h?.rssi?.let { kv("RSSI", "$it dBm") }
+            h?.let { kv("Last heard", ageLabel(it.lastHeardMs)) }
+            c?.let { if (it.lastAdvert > 0) kv("Last advert", epoch(it.lastAdvert)) }
+            c?.let { if (it.outPathLen in 0..63) kv("Path", "${it.outPathLen} hop(s)") else kv("Path", "flood / unknown") }
+
+            // radio config — only meaningful for our own node
+            s?.let {
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                kv("Frequency", "${it.freqMhz} MHz")
+                kv("Bandwidth", "${it.bwKhz} kHz")
+                kv("Spreading factor", "SF${it.radioSf}")
+                kv("Coding rate", "4/${it.radioCr}")
+                kv("TX power", "${it.txPower} dBm")
+            }
+
+            val key = c?.publicKey?.toHex() ?: s?.publicKey?.toHex() ?: h?.pubKeyHex
+            key?.let {
+                Text("Public key", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+                Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun kv(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        Text(value, fontFamily = FontFamily.Monospace)
+    }
+}
+
+private fun ageLabel(ms: Long): String {
+    val secs = ((System.currentTimeMillis() - ms) / 1000).coerceAtLeast(0)
+    return when {
+        secs < 60 -> "${secs}s ago"
+        secs < 3600 -> "${secs / 60}m ago"
+        secs < 86400 -> "${secs / 3600}h ago"
+        else -> "${secs / 86400}d ago"
+    }
+}
+
+private fun epoch(sec: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(sec * 1000))
