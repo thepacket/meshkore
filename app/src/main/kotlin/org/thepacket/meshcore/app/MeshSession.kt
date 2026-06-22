@@ -21,6 +21,7 @@ import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.DeviceInfo
 import org.thepacket.meshcore.protocol.Incoming
+import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PacketStats
 import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.toHex
@@ -106,6 +107,10 @@ class MeshSession(
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
+    /** This node's own telemetry (LPP readings), for the "My telemetry" view. */
+    private val _telemetry = MutableStateFlow<List<Lpp.Reading>>(emptyList())
+    val telemetry: StateFlow<List<Lpp.Reading>> = _telemetry.asStateFlow()
+
     /** Emitted after each settings write (OK/ERR) for UI feedback. */
     private val _settingsResult = MutableSharedFlow<SettingsResult>(extraBufferCapacity = 8)
     val settingsResult: SharedFlow<SettingsResult> = _settingsResult.asSharedFlow()
@@ -147,8 +152,12 @@ class MeshSession(
         scope.launch { link.send(Requests.getAutoAddConfig()) }
         scope.launch { link.send(Requests.deviceQuery()) }
         scope.launch { link.send(Requests.getBattAndStorage()) }
+        scope.launch { link.send(Requests.selfTelemetry()) }
         startStatsPolling()
     }
+
+    /** Re-request this node's own telemetry. */
+    fun refreshTelemetry() = scope.launch { runCatching { link.send(Requests.selfTelemetry()) } }.let {}
 
     private fun dbg(msg: String) {
         Log.d(TAG, msg)
@@ -172,6 +181,7 @@ class MeshSession(
         _autoAdd.value = null
         _deviceInfo.value = null
         _battStorage.value = null
+        _telemetry.value = emptyList()
         pendingSettings.clear()
         lastAdvertSnrQ = null; lastAdvertRssi = null
         contactAccumulator.clear()
@@ -403,6 +413,7 @@ class MeshSession(
             is Incoming.AutoAdd -> _autoAdd.value = f.config
             is Incoming.Device -> _deviceInfo.value = f.info
             is Incoming.Battery -> _battStorage.value = f.info
+            is Incoming.Telemetry -> _telemetry.value = f.readings
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
             is Incoming.RxPacket -> {

@@ -10,10 +10,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -21,6 +26,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.thepacket.meshcore.protocol.CoreStats
+import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PacketStats
 import org.thepacket.meshcore.protocol.RadioStats
 
@@ -30,6 +36,8 @@ fun StatsContent(
     core: CoreStats?,
     packets: PacketStats?,
     noiseHistory: List<Int>,
+    telemetry: List<Lpp.Reading>,
+    onRefreshTelemetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -39,6 +47,7 @@ fun StatsContent(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        TelemetryCard(telemetry, onRefreshTelemetry)
         NoiseCard(noiseHistory, radio?.noiseFloor)
         radio?.let { RadioCard(it) }
         core?.let { CoreCard(it) }
@@ -46,6 +55,62 @@ fun StatsContent(
         if (radio == null && core == null) {
             Text("Reading stats…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
+    }
+}
+
+@Composable
+private fun TelemetryCard(telemetry: List<Lpp.Reading>, onRefresh: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("My telemetry", style = MaterialTheme.typography.titleMedium)
+                IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
+            }
+            if (telemetry.isEmpty()) {
+                Text("No telemetry.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            } else {
+                telemetry.groupBy { it.channel }.toSortedMap().forEach { (ch, readings) ->
+                    Text("Channel $ch", style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary)
+                    readings.forEach { StatRow(telemetryLabel(it), telemetryValue(it)) }
+                }
+            }
+        }
+    }
+}
+
+private fun telemetryLabel(r: Lpp.Reading): String = when (r.type) {
+    Lpp.VOLTAGE -> if (r.channel == 1) "Battery" else "Voltage"
+    Lpp.TEMPERATURE -> "Temperature"
+    Lpp.RELATIVE_HUMIDITY -> "Relative humidity"
+    Lpp.BAROMETRIC_PRESSURE -> "Barometric pressure"
+    Lpp.ALTITUDE -> "Altitude"
+    Lpp.CURRENT -> "Current"
+    Lpp.POWER -> "Power"
+    Lpp.GPS -> "Location"
+    Lpp.LUMINOSITY -> "Luminosity"
+    Lpp.DIRECTION -> "Direction"
+    else -> "Type ${r.type}"
+}
+
+private fun telemetryValue(r: Lpp.Reading): String {
+    fun n(d: Double) = if (d == d.toLong().toDouble()) d.toLong().toString() else "%.1f".format(d)
+    val v = r.values.firstOrNull() ?: return "—"
+    return when (r.type) {
+        Lpp.VOLTAGE -> if (r.channel == 1) {
+            val pct = (((v - 3.3) / (4.2 - 3.3)) * 100).coerceIn(0.0, 100.0).toInt()
+            "$pct% / ${"%.2f".format(v)}v"
+        } else "${"%.2f".format(v)} V"
+        Lpp.TEMPERATURE -> "${n(v)}°C / ${n(v * 9 / 5 + 32)}°F"
+        Lpp.RELATIVE_HUMIDITY -> "${n(v)}%"
+        Lpp.BAROMETRIC_PRESSURE -> "${n(v)} hPa"
+        Lpp.ALTITUDE -> "${n(v)}m / ${n(v * 3.28084)}ft"
+        Lpp.CURRENT -> "${"%.3f".format(v)} A"
+        Lpp.POWER -> "${n(v)} W"
+        Lpp.GPS -> if (r.values.size >= 2) "%.5f, %.5f".format(r.values[0], r.values[1]) else n(v)
+        else -> r.values.joinToString(", ") { n(it) }
     }
 }
 

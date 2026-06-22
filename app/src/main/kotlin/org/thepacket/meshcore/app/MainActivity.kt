@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
             val core by vm.session.coreStats.collectAsStateWithLifecycle()
             val packetStats by vm.session.packetStats.collectAsStateWithLifecycle()
             val noise by vm.session.noiseHistory.collectAsStateWithLifecycle()
+            val telemetry by vm.session.telemetry.collectAsStateWithLifecycle()
 
             val permLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity() {
                         core = core,
                         packetStats = packetStats,
                         noiseHistory = noise,
+                        telemetry = telemetry,
                         onOpenConversation = vm::openConversation,
                     )
                     is Screen.Conversation -> ConversationScreen(

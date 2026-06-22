@@ -56,6 +56,12 @@ sealed interface Incoming {
     data class Trace(val result: TraceResult) : Incoming
     data class RxPacket(val log: RxLog) : Incoming
 
+    /** PUSH_CODE_TELEMETRY_RESPONSE — decoded LPP readings from [pubKeyPrefix]. */
+    data class Telemetry(val pubKeyPrefix: ByteArray, val readings: List<Lpp.Reading>) : Incoming {
+        override fun equals(other: Any?) = other is Telemetry && pubKeyPrefix.contentEquals(other.pubKeyPrefix) && readings == other.readings
+        override fun hashCode() = pubKeyPrefix.contentHashCode() * 31 + readings.hashCode()
+    }
+
     // ---- stats (replies to CMD_GET_STATS) ----
     data class CoreStatsResp(val stats: CoreStats) : Incoming
     data class RadioStatsResp(val stats: RadioStats) : Incoming
@@ -116,6 +122,11 @@ object FrameDecoder {
                 Push.STATUS_RESPONSE -> Incoming.Status(parseRepeaterStats(r))
                 Push.TRACE_DATA -> Incoming.Trace(parseTrace(r))
                 Push.LOG_RX_DATA -> Incoming.RxPacket(parseRxLog(r))
+                Push.TELEMETRY_RESPONSE -> {
+                    r.u8() // reserved
+                    val prefix = r.bytes(minOf(6, r.remaining))
+                    Incoming.Telemetry(prefix, Lpp.decode(r.rest()))
+                }
 
                 else -> Incoming.Raw(code, frame.copyOfRange(1, frame.size))
             }

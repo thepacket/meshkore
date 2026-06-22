@@ -400,6 +400,26 @@ class FrameCodecTest {
         assertEquals(2, info.pathHashMode)
     }
 
+    @Test fun decodeSelfTelemetryLpp() {
+        // ch1 voltage 4.09V (409/100,t116); ch2 temp 24.3C (243/10,t103),
+        // humidity 52% (104/2,t104), pressure 1009.3hPa (10093/10,t115).
+        val frame = FrameWriter()
+            .u8(Push.TELEMETRY_RESPONSE).u8(0).bytes(ByteArray(6))
+            .u8(1).u8(Lpp.VOLTAGE).u8(0x01).u8(0x99)
+            .u8(2).u8(Lpp.TEMPERATURE).u8(0x00).u8(0xF3)
+            .u8(2).u8(Lpp.RELATIVE_HUMIDITY).u8(104)
+            .u8(2).u8(Lpp.BAROMETRIC_PRESSURE).u8(0x27).u8(0x6D)
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.Telemetry)
+        val rs = (d as Incoming.Telemetry).readings
+        assertEquals(4, rs.size)
+        assertEquals(1, rs[0].channel); assertEquals(4.09, rs[0].values[0], 1e-9)
+        assertEquals(2, rs[1].channel); assertEquals(24.3, rs[1].values[0], 1e-9)
+        assertEquals(52.0, rs[2].values[0], 1e-9)
+        assertEquals(1009.3, rs[3].values[0], 1e-6)
+    }
+
     @Test fun unknownCodeBecomesRawNotCrash() {
         val decoded = FrameDecoder.decode(byteArrayOf(0x7F, 1, 2, 3))
         assertTrue(decoded is Incoming.Raw)

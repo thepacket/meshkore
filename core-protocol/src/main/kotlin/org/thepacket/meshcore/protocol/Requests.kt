@@ -98,6 +98,9 @@ object Requests {
 
     fun getTuningParams(): ByteArray = FrameWriter().u8(Cmd.GET_TUNING_PARAMS).build()
 
+    /** Request this node's own telemetry (a 4-byte frame triggers the self reply). */
+    fun selfTelemetry(): ByteArray = FrameWriter().u8(Cmd.SEND_TELEMETRY_REQ).u8(0).u8(0).u8(0).build()
+
     /** Auto-add config: [AutoAdd] flag bitmask + max hops (0 = unlimited). */
     fun setAutoAddConfig(flags: Int, maxHops: Int): ByteArray =
         FrameWriter().u8(Cmd.SET_AUTOADD_CONFIG).u8(flags).u8(maxHops).build()

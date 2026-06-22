@@ -44,6 +44,7 @@ fun MainScaffold(
     core: CoreStats?,
     packetStats: PacketStats?,
     noiseHistory: List<Int>,
+    telemetry: List<org.thepacket.meshcore.protocol.Lpp.Reading>,
     onOpenConversation: (id: String, title: String) -> Unit,
 ) {
     val title = when (tab) {
@@ -107,7 +108,7 @@ fun MainScaffold(
             MainTab.Chats -> HomeContent(self, channels, contacts, onOpenConversation, m)
             MainTab.Heard -> HeardContent(heard, contacts, self, m)
             MainTab.Packets -> PacketMonitorContent(packets, contacts, self, m)
-            MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, m)
+            MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, telemetry, session::refreshTelemetry, m)
             MainTab.Map -> MapContent(self, contacts, heard, m)
             MainTab.Settings -> SettingsContent(session, self, m)
         }
