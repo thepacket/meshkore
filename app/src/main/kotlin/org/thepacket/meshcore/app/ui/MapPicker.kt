@@ -6,11 +6,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,15 +50,12 @@ fun MapPickerDialog(
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Tap the map to set position", style = MaterialTheme.typography.titleMedium)
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
-                }
+            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+                Text(
+                    "Tap the map to set position",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
                 AndroidView(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     factory = { ctx ->
@@ -84,17 +82,19 @@ fun MapPickerDialog(
                     },
                     onRelease = { it.onDetach() },
                 )
-                Row(
-                    Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
                     Text(
                         picked?.let { "%.5f, %.5f".format(it.latitude, it.longitude) } ?: "No point selected",
-                        modifier = Modifier.weight(1f), fontFamily = FontFamily.Monospace,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(bottom = 10.dp),
                     )
-                    Button(enabled = picked != null, onClick = { picked?.let { onPick(it.latitude, it.longitude) } }) {
-                        Text("Use this")
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            enabled = picked != null,
+                            modifier = Modifier.weight(1f),
+                            onClick = { picked?.let { onPick(it.latitude, it.longitude) } },
+                        ) { Text("Save") }
+                        OutlinedButton(modifier = Modifier.weight(1f), onClick = onDismiss) { Text("Cancel") }
                     }
                 }
             }

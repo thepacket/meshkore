@@ -98,10 +98,12 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
 
         // ---- Radio ----
         val bwList = remember(self) { (BW_OPTIONS + self.bwKhz).distinct().sorted() }
+        val sfList = remember { (5..12).map { it.toString() } }
+        val crList = remember { (5..8).map { it.toString() } }
         var freq by remember(self) { mutableStateOf(trimNum(self.freqMhz)) }
         var bwIdx by remember(self) { mutableIntStateOf(bwList.indexOf(self.bwKhz).coerceAtLeast(0)) }
-        var sf by remember(self) { mutableStateOf(self.radioSf.toString()) }
-        var cr by remember(self) { mutableStateOf(self.radioCr.toString()) }
+        var sfIdx by remember(self) { mutableIntStateOf((self.radioSf - 5).coerceIn(0, sfList.lastIndex)) }
+        var crIdx by remember(self) { mutableIntStateOf((self.radioCr - 5).coerceIn(0, crList.lastIndex)) }
         var repeat by remember(self) { mutableStateOf(false) }
         var presetIdx by remember(self) { mutableIntStateOf(detectPreset(self.freqMhz, self.bwKhz, self.radioSf, self.radioCr)) }
         SectionCard("Radio") {
@@ -109,19 +111,21 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
                 presetIdx = i
                 if (i > 0) {
                     val p = PRESETS[i - 1]
-                    freq = trimNum(p.freqMhz); sf = p.sf.toString(); cr = p.cr.toString()
+                    freq = trimNum(p.freqMhz)
                     bwIdx = bwList.indexOf(p.bwKhz).coerceAtLeast(0)
+                    sfIdx = (p.sf - 5).coerceIn(0, sfList.lastIndex)
+                    crIdx = (p.cr - 5).coerceIn(0, crList.lastIndex)
                 }
             }
             Field("Frequency (MHz)", freq) { freq = it; presetIdx = 0 }
             EnumDropdown("Bandwidth (kHz)", bwList.map { trimNum(it) }, bwIdx) { bwIdx = it; presetIdx = 0 }
-            Field("Spreading factor (5–12)", sf) { sf = it; presetIdx = 0 }
-            Field("Coding rate (5–8)", cr) { cr = it; presetIdx = 0 }
+            EnumDropdown("Spreading factor", sfList, sfIdx) { sfIdx = it; presetIdx = 0 }
+            EnumDropdown("Coding rate", crList, crIdx) { crIdx = it; presetIdx = 0 }
             SwitchRow("Client-repeat mode", repeat) { repeat = it }
             SaveRow {
-                val fq = freq.toDoubleOrNull(); val s = sf.toIntOrNull(); val c = cr.toIntOrNull()
-                if (fq != null && s != null && c != null) session.applyRadio(fq, bwList[bwIdx], s, c, repeat)
-                else toast(ctx, "Radio: invalid number")
+                val fq = freq.toDoubleOrNull()
+                if (fq != null) session.applyRadio(fq, bwList[bwIdx], sfIdx + 5, crIdx + 5, repeat)
+                else toast(ctx, "Radio: invalid frequency")
             }
         }
 
