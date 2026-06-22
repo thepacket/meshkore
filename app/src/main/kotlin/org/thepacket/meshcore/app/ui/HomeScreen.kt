@@ -20,13 +20,21 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import org.thepacket.meshcore.app.ChannelEntry
+import org.thepacket.meshcore.app.Conversation
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
@@ -35,51 +43,83 @@ import kotlin.math.abs
 @Composable
 fun HomeContent(
     self: SelfInfo?,
-    channels: List<org.thepacket.meshcore.app.ChannelEntry>,
+    channels: List<ChannelEntry>,
     contacts: List<Contact>,
     onOpenConversation: (id: String, title: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var tab by remember { mutableIntStateOf(0) }
+    Column(modifier.fillMaxSize()) {
+        self?.let {
+            Box(Modifier.padding(12.dp)) { DeviceHeader(it) }
+        }
+        TabRow(selectedTabIndex = tab) {
+            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Contacts") })
+            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Channels") })
+        }
+        when (tab) {
+            0 -> ContactsList(contacts, onOpenConversation)
+            else -> ChannelsList(channels, onOpenConversation)
+        }
+    }
+}
+
+@Composable
+private fun ContactsList(contacts: List<Contact>, onOpen: (String, String) -> Unit) {
+    if (contacts.isEmpty()) {
+        EmptyHint("No contacts synced yet.")
+        return
+    }
+    // Sorted alphabetically by display name (case-insensitive).
+    val sorted = remember(contacts) {
+        contacts.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
+    }
     LazyColumn(
-        modifier.fillMaxSize(),
+        Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-            self?.let {
-                item { DeviceHeader(it) }
-            }
-            item {
-                Text("Channels", style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
-            }
-            items(channels, key = { "ch:${it.index}" }) { ch ->
-                ConversationRow(
-                    icon = Icons.Default.Campaign,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    title = ch.displayName,
-                    subtitle = "Channel ${ch.index}",
-                    onClick = { onOpenConversation(org.thepacket.meshcore.app.Conversation.channelId(ch.index), ch.displayName) },
-                )
-            }
-            item {
-                Text("Contacts", style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 4.dp, top = 8.dp))
-            }
-            if (contacts.isEmpty()) {
-                item { Text("No contacts synced yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    modifier = Modifier.padding(8.dp)) }
-            }
-            items(contacts, key = { it.keyPrefixHex }) { c ->
-                ConversationRow(
-                    icon = if (c.isRepeater) Icons.Default.Router else Icons.Default.Person,
-                    tint = nameColor(c.name.ifBlank { c.keyPrefixHex }),
-                    title = c.name.ifBlank { c.keyPrefixHex },
-                    subtitle = contactTypeLabel(c.type),
-                    onClick = { onOpenConversation(org.thepacket.meshcore.app.Conversation.dmId(c), c.name.ifBlank { c.keyPrefixHex }) },
-                )
-            }
+        items(sorted, key = { it.keyPrefixHex }) { c ->
+            ConversationRow(
+                icon = if (c.isRepeater) Icons.Default.Router else Icons.Default.Person,
+                tint = nameColor(c.name.ifBlank { c.keyPrefixHex }),
+                title = c.name.ifBlank { c.keyPrefixHex },
+                subtitle = contactTypeLabel(c.type),
+                onClick = { onOpen(Conversation.dmId(c), c.name.ifBlank { c.keyPrefixHex }) },
+            )
         }
     }
+}
+
+@Composable
+private fun ChannelsList(channels: List<ChannelEntry>, onOpen: (String, String) -> Unit) {
+    if (channels.isEmpty()) {
+        EmptyHint("No channels.")
+        return
+    }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(channels, key = { "ch:${it.index}" }) { ch ->
+            ConversationRow(
+                icon = Icons.Default.Campaign,
+                tint = MaterialTheme.colorScheme.tertiary,
+                title = ch.displayName,
+                subtitle = "Channel ${ch.index}",
+                onClick = { onOpen(Conversation.channelId(ch.index), ch.displayName) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyHint(text: String) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+    }
+}
 
 @Composable
 private fun DeviceHeader(self: SelfInfo) {
