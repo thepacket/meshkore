@@ -205,6 +205,22 @@ class FrameCodecTest {
         assertEquals("yo", r.restAsString())
     }
 
+    @Test fun decodeNewAdvertAsContact() {
+        val pub = ByteArray(32) { (it + 3).toByte() }
+        val frame = FrameWriter()
+            .u8(Push.NEW_ADVERT)
+            .bytes(pub)
+            .u8(ContactType.CHAT)
+            .u8(0).u8(0)
+            .bytes(ByteArray(64))
+            .bytes("NewNode".toByteArray().copyOf(32))
+            .u32(1_700_000_000L).i32(0).i32(0).u32(1_700_000_000L)
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.NewAdvert)
+        assertEquals("NewNode", (d as Incoming.NewAdvert).contact.name)
+    }
+
     @Test fun decodeAdvertPushCarries32BytePubkey() {
         val pub = ByteArray(32) { (it * 7).toByte() }
         val decoded = FrameDecoder.decode(FrameWriter().u8(Push.ADVERT).bytes(pub).build())

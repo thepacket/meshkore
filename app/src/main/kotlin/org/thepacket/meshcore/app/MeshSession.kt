@@ -14,6 +14,8 @@ import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.Incoming
 import org.thepacket.meshcore.protocol.PacketStats
+import org.thepacket.meshcore.protocol.PayloadType
+import org.thepacket.meshcore.protocol.toHex
 import org.thepacket.meshcore.protocol.RadioStats
 import org.thepacket.meshcore.protocol.Requests
 import org.thepacket.meshcore.protocol.RxLog
@@ -70,7 +72,14 @@ class MeshSession(
     private val _noiseHistory = MutableStateFlow<List<Int>>(emptyList())
     val noiseHistory: StateFlow<List<Int>> = _noiseHistory.asStateFlow()
 
+    /** Recently-heard stations (most-recent first). */
+    private val _heard = MutableStateFlow<List<HeardEntry>>(emptyList())
+    val heard: StateFlow<List<HeardEntry>> = _heard.asStateFlow()
+
     private var statsJob: Job? = null
+    /** Signal from the most recent ADVERT-type RX packet, to attach to the next advert push. */
+    private var lastAdvertSnrQ: Int? = null
+    private var lastAdvertRssi: Int? = null
 
     // --- internal sync/send bookkeeping ---
     private val contactAccumulator = mutableListOf<Contact>()
@@ -102,6 +111,8 @@ class MeshSession(
         _coreStats.value = null
         _packetStats.value = null
         _noiseHistory.value = emptyList()
+        _heard.value = emptyList()
+        lastAdvertSnrQ = null; lastAdvertRssi = null
         contactAccumulator.clear()
         channelAccumulator.clear()
         pendingSends.clear()
@@ -199,7 +210,31 @@ class MeshSession(
                 else onSendFailed()
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
-            is Incoming.RxPacket -> _packets.update { (listOf(f.log) + it).take(MAX_PACKETS) }
+            is Incoming.RxPacket -> {
+                _packets.update { (listOf(f.log) + it).take(MAX_PACKETS) }
+                // Remember the signal of the latest advert packet to attach to the advert push.
+                if (f.log.payloadType == PayloadType.ADVERT) {
+                    lastAdvertSnrQ = f.log.snrQ; lastAdvertRssi = f.log.rssi
+                }
+            }
+            is Incoming.AdvertHeard -> upsertHeardByKey(f.publicKey)
+            is Incoming.NewAdvert -> {
+                // also fold the new node into the contact list
+                _contacts.update { list ->
+                    if (list.any { it.publicKey.contentEquals(f.contact.publicKey) }) list
+                    else (list + f.contact).sortedByDescending { it.lastAdvert }
+                }
+                upsertHeard(
+                    HeardEntry(
+                        pubKeyHex = f.contact.publicKey.toHex(),
+                        name = f.contact.name,
+                        type = f.contact.type,
+                        lastHeardMs = System.currentTimeMillis(),
+                        snrQ = lastAdvertSnrQ, rssi = lastAdvertRssi,
+                        gpsLat = f.contact.gpsLat, gpsLon = f.contact.gpsLon,
+                    )
+                )
+            }
             is Incoming.RadioStatsResp -> {
                 _radioStats.value = f.stats
                 _noiseHistory.update { (it + f.stats.noiseFloor).takeLast(NOISE_HISTORY) }
@@ -208,6 +243,29 @@ class MeshSession(
             is Incoming.PacketStatsResp -> _packetStats.value = f.stats
 
             else -> Unit // adverts/path-updates/etc. handled elsewhere later
+        }
+    }
+
+    /** Re-advert from a known node: enrich with its contact details if we have them. */
+    private fun upsertHeardByKey(pubKey: ByteArray) {
+        val hex = pubKey.toHex()
+        val c = _contacts.value.firstOrNull { it.publicKey.contentEquals(pubKey) }
+        upsertHeard(
+            HeardEntry(
+                pubKeyHex = hex,
+                name = c?.name ?: hex.take(12),
+                type = c?.type ?: 0,
+                lastHeardMs = System.currentTimeMillis(),
+                snrQ = lastAdvertSnrQ, rssi = lastAdvertRssi,
+                gpsLat = c?.gpsLat ?: 0, gpsLon = c?.gpsLon ?: 0,
+            )
+        )
+    }
+
+    private fun upsertHeard(entry: HeardEntry) {
+        _heard.update { list ->
+            (listOf(entry) + list.filterNot { it.pubKeyHex == entry.pubKeyHex })
+                .sortedByDescending { it.lastHeardMs }
         }
     }
 

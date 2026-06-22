@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
             val contacts by vm.session.contacts.collectAsStateWithLifecycle()
             val messages by vm.session.messages.collectAsStateWithLifecycle()
             val packets by vm.session.packets.collectAsStateWithLifecycle()
+            val heard by vm.session.heard.collectAsStateWithLifecycle()
             val radio by vm.session.radioStats.collectAsStateWithLifecycle()
             val core by vm.session.coreStats.collectAsStateWithLifecycle()
             val packetStats by vm.session.packetStats.collectAsStateWithLifecycle()
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
                         channels = channels,
                         contacts = contacts,
                         packets = packets,
+                        heard = heard,
                         radio = radio,
                         core = core,
                         packetStats = packetStats,

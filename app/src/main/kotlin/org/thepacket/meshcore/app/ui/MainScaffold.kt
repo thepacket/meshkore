@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -34,6 +35,7 @@ fun MainScaffold(
     channels: List<ChannelEntry>,
     contacts: List<Contact>,
     packets: List<RxLog>,
+    heard: List<org.thepacket.meshcore.app.HeardEntry>,
     radio: RadioStats?,
     core: CoreStats?,
     packetStats: PacketStats?,
@@ -42,6 +44,7 @@ fun MainScaffold(
 ) {
     val title = when (tab) {
         MainTab.Chats -> self?.name?.ifBlank { "MeshCore" } ?: "MeshCore"
+        MainTab.Heard -> "Heard"
         MainTab.Packets -> "Packet monitor"
         MainTab.Stats -> "Statistics"
     }
@@ -61,6 +64,12 @@ fun MainScaffold(
                     label = { Text("Chats") },
                 )
                 NavigationBarItem(
+                    selected = tab == MainTab.Heard,
+                    onClick = { onTab(MainTab.Heard) },
+                    icon = { Icon(Icons.Default.Hearing, contentDescription = null) },
+                    label = { Text("Heard") },
+                )
+                NavigationBarItem(
                     selected = tab == MainTab.Packets,
                     onClick = { onTab(MainTab.Packets) },
                     icon = { Icon(Icons.Default.Sensors, contentDescription = null) },
@@ -78,6 +87,7 @@ fun MainScaffold(
         val m = Modifier.padding(pad)
         when (tab) {
             MainTab.Chats -> HomeContent(self, channels, contacts, onOpenConversation, m)
+            MainTab.Heard -> HeardContent(heard, self, m)
             MainTab.Packets -> PacketMonitorContent(packets, m)
             MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, m)
         }

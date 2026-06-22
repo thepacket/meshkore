@@ -3,6 +3,37 @@ package org.thepacket.meshcore.app
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.toHex
 
+/**
+ * A recently-heard station (from advert pushes), with signal correlated from the
+ * most recent advert-type packet in the RX feed. gps in 1e-6 degrees (0 = unknown).
+ */
+data class HeardEntry(
+    val pubKeyHex: String,
+    val name: String,
+    val type: Int,
+    val lastHeardMs: Long,
+    val snrQ: Int? = null,
+    val rssi: Int? = null,
+    val gpsLat: Int = 0,
+    val gpsLon: Int = 0,
+) {
+    val snrDb: Double? get() = snrQ?.let { it / 4.0 }
+    val hasGps: Boolean get() = gpsLat != 0 || gpsLon != 0
+    val latDeg: Double get() = gpsLat / 1e6
+    val lonDeg: Double get() = gpsLon / 1e6
+}
+
+/** Great-circle distance in km between two lat/lon pairs (degrees). */
+fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val r = 6371.0
+    val dLat = Math.toRadians(lat2 - lat1)
+    val dLon = Math.toRadians(lon2 - lon1)
+    val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2)
+    return r * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
 /** A group channel slot enumerated from the device. */
 data class ChannelEntry(val index: Int, val name: String) {
     val displayName: String get() = name.ifBlank { if (index == 0) "Public" else "Channel $index" }

@@ -46,6 +46,8 @@ sealed interface Incoming {
         override fun equals(other: Any?) = other is PathUpdated && publicKey.contentEquals(other.publicKey)
         override fun hashCode() = publicKey.contentHashCode()
     }
+    /** A newly discovered node (PUSH_CODE_NEW_ADVERT) — full contact frame, like RESP_CODE_CONTACT. */
+    data class NewAdvert(val contact: Contact) : Incoming
     data class SendConfirmed(val ackId: Long, val roundTripMs: Long) : Incoming
     data object MsgWaiting : Incoming
     data object LoginSuccess : Incoming
@@ -96,6 +98,7 @@ object FrameDecoder {
                 Resp.CHANNEL_INFO -> Incoming.ChannelInfo(r.u8(), r.cstr(32), r.bytes(minOf(16, r.remaining)))
 
                 Push.ADVERT -> Incoming.AdvertHeard(r.bytes(minOf(32, r.remaining)))
+                Push.NEW_ADVERT -> Incoming.NewAdvert(parseContact(r))
                 Push.PATH_UPDATED -> Incoming.PathUpdated(r.bytes(minOf(32, r.remaining)))
                 Push.SEND_CONFIRMED -> Incoming.SendConfirmed(r.u32(), if (r.remaining >= 4) r.u32() else 0)
                 Push.MSG_WAITING -> Incoming.MsgWaiting
