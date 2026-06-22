@@ -20,10 +20,12 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +42,29 @@ import org.thepacket.meshcore.protocol.AutoAdd
 import org.thepacket.meshcore.protocol.SelfInfo
 
 private val TELEM = listOf("Deny", "Allow-listed", "Everyone")
+
+/** Region frequency plans (mirrors the firmware's RADIO_PRESETS). */
+private data class RadioPreset(val name: String, val freqMhz: Double, val bwKhz: Double, val sf: Int, val cr: Int)
+private val PRESETS = listOf(
+    RadioPreset("USA/Canada", 910.525, 62.5, 7, 5),
+    RadioPreset("EU", 869.525, 250.0, 10, 5),
+    RadioPreset("UK/CH", 869.618, 62.5, 8, 8),
+    RadioPreset("AU/NZ", 915.800, 250.0, 10, 5),
+)
+private val PRESET_NAMES = listOf("Custom") + PRESETS.map { it.name }
+
+/** Standard LoRa bandwidths (kHz). */
+private val BW_OPTIONS = listOf(7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125.0, 250.0, 500.0)
+
+private fun detectPreset(freqMhz: Double, bwKhz: Double, sf: Int, cr: Int): Int {
+    val i = PRESETS.indexOfFirst {
+        kotlin.math.abs(it.freqMhz - freqMhz) < 0.001 && it.bwKhz == bwKhz && it.sf == sf && it.cr == cr
+    }
+    return if (i >= 0) i + 1 else 0 // 0 = Custom
+}
+
+private fun trimNum(d: Double): String =
+    if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
 
 @Composable
 fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Modifier) {
@@ -72,44 +97,64 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         }
 
         // ---- Radio ----
-        var freq by remember(self) { mutableStateOf(self.freqMhz.toString()) }
-        var bw by remember(self) { mutableStateOf(self.bwKhz.toString()) }
+        val bwList = remember(self) { (BW_OPTIONS + self.bwKhz).distinct().sorted() }
+        var freq by remember(self) { mutableStateOf(trimNum(self.freqMhz)) }
+        var bwIdx by remember(self) { mutableIntStateOf(bwList.indexOf(self.bwKhz).coerceAtLeast(0)) }
         var sf by remember(self) { mutableStateOf(self.radioSf.toString()) }
         var cr by remember(self) { mutableStateOf(self.radioCr.toString()) }
         var repeat by remember(self) { mutableStateOf(false) }
+        var presetIdx by remember(self) { mutableIntStateOf(detectPreset(self.freqMhz, self.bwKhz, self.radioSf, self.radioCr)) }
         SectionCard("Radio") {
-            Field("Frequency (MHz)", freq) { freq = it }
-            Field("Bandwidth (kHz)", bw) { bw = it }
-            Field("Spreading factor (5–12)", sf) { sf = it }
-            Field("Coding rate (5–8)", cr) { cr = it }
+            EnumDropdown("Region preset", PRESET_NAMES, presetIdx) { i ->
+                presetIdx = i
+                if (i > 0) {
+                    val p = PRESETS[i - 1]
+                    freq = trimNum(p.freqMhz); sf = p.sf.toString(); cr = p.cr.toString()
+                    bwIdx = bwList.indexOf(p.bwKhz).coerceAtLeast(0)
+                }
+            }
+            Field("Frequency (MHz)", freq) { freq = it; presetIdx = 0 }
+            EnumDropdown("Bandwidth (kHz)", bwList.map { trimNum(it) }, bwIdx) { bwIdx = it; presetIdx = 0 }
+            Field("Spreading factor (5–12)", sf) { sf = it; presetIdx = 0 }
+            Field("Coding rate (5–8)", cr) { cr = it; presetIdx = 0 }
             SwitchRow("Client-repeat mode", repeat) { repeat = it }
             SaveRow {
-                val fq = freq.toDoubleOrNull(); val b = bw.toDoubleOrNull()
-                val s = sf.toIntOrNull(); val c = cr.toIntOrNull()
-                if (fq != null && b != null && s != null && c != null) session.applyRadio(fq, b, s, c, repeat)
+                val fq = freq.toDoubleOrNull(); val s = sf.toIntOrNull(); val c = cr.toIntOrNull()
+                if (fq != null && s != null && c != null) session.applyRadio(fq, bwList[bwIdx], s, c, repeat)
                 else toast(ctx, "Radio: invalid number")
             }
         }
 
-        // ---- TX power ----
-        var tx by remember(self) { mutableStateOf(self.txPower.toString()) }
+        // ---- TX power (up to 30 dBm; the radio rejects above its hardware max) ----
+        var tx by remember(self) { mutableFloatStateOf(self.txPower.toFloat()) }
         SectionCard("Transmit power") {
-            Field("TX power (dBm, −9…${self.maxTxPower})", tx) { tx = it }
-            SaveRow { tx.toIntOrNull()?.let { session.applyTxPower(it) } ?: toast(ctx, "TX power: invalid") }
+            Text("${tx.toInt()} dBm    (hardware max ${self.maxTxPower})",
+                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Slider(value = tx, onValueChange = { tx = it }, valueRange = -9f..30f, steps = 38)
+            SaveRow { session.applyTxPower(tx.toInt()) }
         }
 
         // ---- Position ----
-        var lat by remember(self) { mutableStateOf(if (self.advLat == 0 && self.advLon == 0) "" else (self.advLat / 1e6).toString()) }
-        var lon by remember(self) { mutableStateOf(if (self.advLat == 0 && self.advLon == 0) "" else (self.advLon / 1e6).toString()) }
+        var lat by remember(self) { mutableStateOf(if (self.advLat == 0 && self.advLon == 0) "" else trimNum(self.advLat / 1e6)) }
+        var lon by remember(self) { mutableStateOf(if (self.advLat == 0 && self.advLon == 0) "" else trimNum(self.advLon / 1e6)) }
+        var showPicker by remember { mutableStateOf(false) }
         SectionCard("Position") {
             Field("Latitude (°)", lat) { lat = it }
             Field("Longitude (°)", lon) { lon = it }
-            SaveRow {
-                val la = lat.toDoubleOrNull(); val lo = lon.toDoubleOrNull()
-                if (la != null && lo != null) session.applyPosition((la * 1e6).toInt(), (lo * 1e6).toInt())
-                else toast(ctx, "Position: invalid number")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                OutlinedButton(onClick = { showPicker = true }) { Text("Pick on map") }
+                Button(onClick = {
+                    val la = lat.toDoubleOrNull(); val lo = lon.toDoubleOrNull()
+                    if (la != null && lo != null) session.applyPosition((la * 1e6).toInt(), (lo * 1e6).toInt())
+                    else toast(ctx, "Position: invalid number")
+                }) { Text("Save") }
             }
         }
+        if (showPicker) MapPickerDialog(
+            initialLat = lat.toDoubleOrNull(), initialLon = lon.toDoubleOrNull(),
+            onPick = { la, lo -> lat = "%.5f".format(la); lon = "%.5f".format(lo); showPicker = false },
+            onDismiss = { showPicker = false },
+        )
 
         // ---- Network & telemetry (one CMD_SET_OTHER_PARAMS) ----
         var manualAdd by remember(self) { mutableStateOf((self.manualAddContacts and 1) == 1) }
