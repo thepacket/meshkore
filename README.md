@@ -58,19 +58,6 @@ The UI never touches BLE/Nordic types directly — it depends only on `MeshCoreL
 touching feature code. Post-connection orchestration (handshake, contacts/channel sync,
 the message drain-loop, sends, stats polling, heard tracking) lives in `MeshSession`.
 
-## Protocol summary
-
-- **Service:** `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` · **RX (write):** `…0002` · **TX (notify):** `…0003`
-- One frame per BLE write/notify, no length prefix; first byte = command/response code
-  (pushes have the high bit set).
-- All multi-byte integers little-endian; strings are fixed-width NUL-terminated or trailing.
-- See [`core-protocol`](core-protocol/src/main/kotlin/org/thepacket/meshcore/protocol)
-  for the full `Cmd` / `Resp` / `Push` code tables and the `FrameDecoder`.
-
-Most frame layouts have been byte-verified against a live device. A couple still used only
-by the deferred repeater feature (`RepeaterStats`, trace-hop records) are marked
-`TODO: confirm` in the codec and will be verified on-device before that feature ships.
-
 ## Building
 
 Requires Android Studio (Koala or newer), or a JDK 17+ with the Android SDK. The Gradle
