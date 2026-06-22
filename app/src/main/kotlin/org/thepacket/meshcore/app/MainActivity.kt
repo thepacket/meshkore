@@ -1,0 +1,53 @@
+package org.thepacket.meshcore.app
+
+import android.Manifest
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import org.thepacket.meshcore.app.ui.ConnectScreen
+import org.thepacket.meshcore.app.ui.MeshCoreTheme
+
+class MainActivity : ComponentActivity() {
+
+    /** Permissions differ by API level: 31+ uses BLUETOOTH_SCAN/CONNECT; 26–30 needs location. */
+    private val blePermissions: Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+
+        setContent {
+            val vm: ConnectionViewModel = viewModel()
+            val state by vm.ui.collectAsStateWithLifecycle()
+
+            val permLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { grants ->
+                if (grants.values.all { it }) vm.startScan()
+            }
+
+            MeshCoreTheme {
+                ConnectScreen(
+                    state = state,
+                    onScanToggle = {
+                        if (state.scanning) vm.stopScan()
+                        else permLauncher.launch(blePermissions)
+                    },
+                    onConnect = vm::connect,
+                    onDisconnect = vm::disconnect,
+                )
+            }
+        }
+    }
+}
