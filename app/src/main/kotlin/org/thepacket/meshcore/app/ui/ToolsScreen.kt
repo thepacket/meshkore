@@ -46,7 +46,7 @@ fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Mod
     Box(modifier.fillMaxSize()) {
         when (open) {
             "trace" -> TraceTool(session, contacts, self) { open = null }
-            "discover" -> DiscoverTool(session) { open = null }
+            "discover" -> DiscoverTool(session, self) { open = null }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -137,9 +137,11 @@ private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfI
 }
 
 @Composable
-private fun DiscoverTool(session: MeshSession, onBack: () -> Unit) {
+private fun DiscoverTool(session: MeshSession, self: SelfInfo?, onBack: () -> Unit) {
     // One-hop neighbours, tracked in the session (cleared on announce, fills from direct adverts).
     val neighbours by session.neighbours.collectAsStateWithLifecycle()
+    val heard by session.heard.collectAsStateWithLifecycle()
+    var selected by remember { mutableStateOf<Contact?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -155,7 +157,7 @@ private fun DiscoverTool(session: MeshSession, onBack: () -> Unit) {
             }
         } else {
             neighbours.forEach { c ->
-                Card(Modifier.fillMaxWidth()) {
+                Card(Modifier.fillMaxWidth().clickable { selected = c }) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(c.name.ifBlank { c.keyPrefixHex }, fontWeight = FontWeight.SemiBold)
                         Text(if (c.isRepeater) "Repeater" else "Direct",
@@ -164,6 +166,18 @@ private fun DiscoverTool(session: MeshSession, onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    selected?.let { c ->
+        NodeDetailSheet(
+            name = c.name.ifBlank { c.keyPrefixHex },
+            type = c.type,
+            isSelf = false,
+            contact = c,
+            heard = heard.firstOrNull { it.pubKeyHex.startsWith(c.keyPrefixHex) },
+            self = self,
+            onDismiss = { selected = null },
+        )
     }
 }
 
