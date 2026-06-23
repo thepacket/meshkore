@@ -43,17 +43,19 @@ fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Mod
     val contacts by session.contacts.collectAsStateWithLifecycle()
     var open by remember { mutableStateOf<String?>(null) }
 
-    when (open) {
-        "trace" -> TraceTool(session, contacts, self) { open = null }
-        "discover" -> DiscoverTool(session, contacts) { open = null }
-        else -> Column(
-            modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ToolRow(Icons.Default.Route, "Trace path",
-                "Trace a path through chosen repeaters; see each hop's SNR.") { open = "trace" }
-            ToolRow(Icons.Default.Podcasts, "Discover nearby nodes",
-                "Announce to direct (one-hop) neighbours and list them.") { open = "discover" }
+    Box(modifier.fillMaxSize()) {
+        when (open) {
+            "trace" -> TraceTool(session, contacts, self) { open = null }
+            "discover" -> DiscoverTool(session, contacts) { open = null }
+            else -> Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                ToolRow(Icons.Default.Route, "Trace path",
+                    "Trace a path through chosen repeaters; see each hop's SNR.") { open = "trace" }
+                ToolRow(Icons.Default.Podcasts, "Discover nearby nodes",
+                    "Announce to direct (one-hop) neighbours and list them.") { open = "discover" }
+            }
         }
     }
 }
