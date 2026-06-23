@@ -181,6 +181,9 @@ class MeshSession(
         scope.launch { runCatching { link.send(Requests.sendTracePath(tag, path)) } }
     }
 
+    /** Discard the last trace result (e.g. to start a new trace). */
+    fun clearTrace() { _traceResult.value = null }
+
     /** Clear the neighbour list and announce ourselves with a zero-hop advert (Discover nearby nodes). */
     fun announceZeroHop() {
         _neighbours.value = emptyList()
