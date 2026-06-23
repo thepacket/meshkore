@@ -12,6 +12,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MeetingRoom
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sensors
@@ -48,8 +50,12 @@ fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Mod
     Box(modifier.fillMaxSize()) {
         when (open) {
             "trace" -> TraceTool(session, contacts, self) { open = null }
+            "companions" -> DiscoverTool(session, self, ContactType.CHAT,
+                "Discover companions", "No nearby companions yet.") { open = null }
             "repeaters" -> DiscoverTool(session, self, ContactType.REPEATER,
                 "Discover repeaters", "No nearby repeaters yet.") { open = null }
+            "rooms" -> DiscoverTool(session, self, ContactType.ROOM,
+                "Discover room servers", "No nearby room servers yet.") { open = null }
             "sensors" -> DiscoverTool(session, self, ContactType.SENSOR,
                 "Discover sensors", "No nearby sensors yet.") { open = null }
             else -> Column(
@@ -58,8 +64,12 @@ fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Mod
             ) {
                 ToolRow(Icons.Default.Route, "Trace path",
                     "Trace a path through chosen repeaters; see each hop's SNR.") { open = "trace" }
+                ToolRow(Icons.Default.Person, "Discover companions",
+                    "Announce and list nearby (one-hop) companion nodes.") { open = "companions" }
                 ToolRow(Icons.Default.Router, "Discover repeaters",
                     "Announce and list nearby (one-hop) repeaters.") { open = "repeaters" }
+                ToolRow(Icons.Default.MeetingRoom, "Discover room servers",
+                    "Announce and list nearby (one-hop) room servers.") { open = "rooms" }
                 ToolRow(Icons.Default.Sensors, "Discover sensors",
                     "Announce and list nearby (one-hop) sensors.") { open = "sensors" }
             }
