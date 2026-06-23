@@ -448,6 +448,21 @@ class MeshSession(
         scope.launch { runCatching { link.send(Requests.setChannel(index, name, secret)) } }
     }
 
+    /**
+     * Delete a channel: MeshCore has no remove-channel command, so we clear the slot by
+     * writing an empty name + zero key. The device then treats it as unused, and the app
+     * hides blank slots. Its chat history is dropped too.
+     */
+    fun deleteChannel(index: Int) {
+        _channels.update { list -> list.filterNot { it.index == index } }
+        val cid = Conversation.channelId(index)
+        if (_messages.value.containsKey(cid)) {
+            _messages.update { it - cid }
+            chatStore?.save(_messages.value)
+        }
+        scope.launch { runCatching { link.send(Requests.setChannel(index, "", ByteArray(16))) } }
+    }
+
     private fun applySetting(label: String, frame: ByteArray) {
         pendingSettings.addLast(label)
         scope.launch { link.send(frame) }
@@ -486,7 +501,8 @@ class MeshSession(
             }
 
             is Incoming.ChannelInfo -> {
-                channelAccumulator.add(ChannelEntry(f.index, f.name, f.secret))
+                // The firmware reports every slot; a blank name means an unused/deleted slot — skip it.
+                if (f.name.isNotBlank()) channelAccumulator.add(ChannelEntry(f.index, f.name, f.secret))
                 _channels.value = channelAccumulator.toList()
                 if (f.index + 1 < MAX_CHANNELS) {
                     scope.launch { link.send(Requests.getChannel(f.index + 1)) }

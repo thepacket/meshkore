@@ -226,6 +226,7 @@ private fun ChannelsList(
             currentAtSlot = ch,
             onDismiss = { editing = null },
             onSave = { name, secret -> session.setChannel(ch.index, name, secret); editing = null },
+            onDelete = { session.deleteChannel(ch.index); editing = null },
         )
     }
 }
@@ -278,10 +279,12 @@ private fun ChannelDialog(
     currentAtSlot: ChannelEntry?,
     onDismiss: () -> Unit,
     onSave: (name: String, secret: ByteArray) -> Unit,
+    onDelete: (() -> Unit)? = null,
 ) {
     var name by remember { mutableStateOf(initialName) }
     var secretHex by remember { mutableStateOf(initialSecretHex) }
     var confirmReplace by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val cleanSecret = secretHex.trim().replace(" ", "").lowercase()
     val secretValid = cleanSecret.length == 32 && cleanSecret.all { it in "0123456789abcdef" }
 
@@ -314,6 +317,11 @@ private fun ChannelDialog(
                     Text("Slot $slot", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         modifier = Modifier.align(Alignment.CenterVertically))
                 }
+                if (onDelete != null) {
+                    TextButton(onClick = { confirmDelete = true }) {
+                        Text("Delete channel", color = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
         },
         confirmButton = {
@@ -343,6 +351,26 @@ private fun ChannelDialog(
                 }
             },
             dismissButton = { TextButton(onClick = { confirmReplace = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmDelete && onDelete != null) {
+        val isPublic = slot == 0 || currentAtSlot?.displayName.equals("Public", ignoreCase = true)
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete channel?") },
+            text = {
+                Text(
+                    "“${currentAtSlot?.displayName ?: name}” will be removed from this device and its messages cleared." +
+                        if (isPublic) "\n\nThis is the Public channel — you can re-add it later by creating a channel named \"Public\" with the public key." else "",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
 }
