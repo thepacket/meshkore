@@ -28,11 +28,10 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
-import org.osmdroid.events.MapEventsReceiver
+import android.view.MotionEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.protocol.Contact
@@ -90,15 +89,6 @@ fun MapContent(
                     setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
                     controller.setZoom(3.0)
-                    // Long-press anywhere → show the nearest node's details (trace mode).
-                    holder.events = MapEventsOverlay(object : MapEventsReceiver {
-                        override fun singleTapConfirmedHelper(p: GeoPoint?) = false
-                        override fun longPressHelper(p: GeoPoint?): Boolean {
-                            if (!holder.traceMode || p == null) return false
-                            val n = nearestNode(this@apply, holder.nodes, p) ?: return false
-                            holder.onInfo(n); return true
-                        }
-                    })
                     // Re-cluster as the viewport changes (clusters depend on screen positions).
                     addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
@@ -154,7 +144,16 @@ private class MapHolder {
     var traceMode = false
     var traceCounts: Map<String, Int> = emptyMap() // keyPrefixHex -> times in path
     var onAddTrace: (Contact) -> Unit = {}
-    var events: MapEventsOverlay? = null
+}
+
+/** A marker that reports a long-press on itself (osmdroid's Marker otherwise swallows it). */
+private class TapMarker(map: MapView) : Marker(map) {
+    var onLong: (() -> Unit)? = null
+    override fun onLongPress(event: MotionEvent, mapView: MapView): Boolean {
+        val cb = onLong
+        if (cb != null && hitTest(event, mapView)) { cb(); return true }
+        return super.onLongPress(event, mapView)
+    }
 }
 
 /** A small numbered/✓ badge drawn over a selected trace node (no label). */
@@ -186,8 +185,6 @@ private fun rebuildOverlays(
 ) {
     val nodes = holder.nodes
     map.overlays.clear()
-    // Keep the long-press receiver at the bottom so markers get taps first.
-    if (holder.traceMode) holder.events?.let { map.overlays.add(it) }
     if (nodes.isEmpty()) { map.invalidate(); return }
 
     val res = map.resources
@@ -206,7 +203,7 @@ private fun rebuildOverlays(
         if (group.size == 1) {
             val n = nodes[i]
             val ni = nodeIcons.getOrPut(nodeKey(n)) { makeNodeIcon(res, n) }
-            map.overlays.add(Marker(map).apply {
+            map.overlays.add(TapMarker(map).apply {
                 position = GeoPoint(n.lat, n.lon)
                 setAnchor(Marker.ANCHOR_CENTER, ni.anchorV) // geo point sits at the circle centre
                 setIcon(ni.drawable)
@@ -215,6 +212,8 @@ private fun rebuildOverlays(
                     if (holder.traceMode && c != null) holder.onAddTrace(c) else holder.onSelect(n)
                     true
                 }
+                // Trace mode: tap adds to the path, long-press shows the node's details.
+                if (holder.traceMode) onLong = { holder.onInfo(n) }
             })
         } else {
             val lat = group.sumOf { nodes[it].lat } / group.size
@@ -239,11 +238,12 @@ private fun rebuildOverlays(
             val count = n.contact?.let { holder.traceCounts[it.keyPrefixHex] } ?: 0
             if (count > 0) {
                 val icon = badgeIcons.getOrPut("$count") { makeBadgeIcon(res, "$count", 0xFF3FC7E8.toInt()) }
-                map.overlays.add(Marker(map).apply {
+                map.overlays.add(TapMarker(map).apply {
                     position = GeoPoint(n.lat, n.lon)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     setIcon(icon)
                     setOnMarkerClickListener { _, _ -> n.contact?.let { holder.onAddTrace(it) }; true }
+                    onLong = { holder.onInfo(n) }
                 })
             }
         }
@@ -258,20 +258,6 @@ private class NodeIcon(val drawable: Drawable, val anchorV: Float)
 
 private fun dist(a: Point, b: Point): Double =
     hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble())
-
-/** Nearest plotted node to a tapped geo point, within a finger-sized radius (or null). */
-private fun nearestNode(map: MapView, nodes: List<MapNode>, p: GeoPoint): MapNode? {
-    val proj = map.projection
-    val tap = proj.toPixels(p, null)
-    val thresh = 44f * map.resources.displayMetrics.density
-    var best: MapNode? = null
-    var bestD = Double.MAX_VALUE
-    for (n in nodes) {
-        val d = dist(tap, proj.toPixels(GeoPoint(n.lat, n.lon), null))
-        if (d < thresh && d < bestD) { bestD = d; best = n }
-    }
-    return best
-}
 
 private fun nodeKey(n: MapNode): String = "${n.type}|${n.isSelf}|${n.name}"
 
