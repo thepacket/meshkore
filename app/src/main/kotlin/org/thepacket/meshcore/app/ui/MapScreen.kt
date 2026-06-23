@@ -16,7 +16,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,7 +29,6 @@ import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -39,7 +37,6 @@ import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
-import org.thepacket.meshcore.protocol.TraceResult
 import kotlin.math.hypot
 
 /**
@@ -63,13 +60,22 @@ fun MapContent(
     contacts: List<Contact>,
     heard: List<HeardEntry>,
     modifier: Modifier = Modifier,
+    // Trace mode: the same map, but tapping a node with a contact toggles it into an
+    // ordered path ([tracePath]) which is drawn as a cyan link ending at this node.
+    traceMode: Boolean = false,
+    tracePath: List<Contact> = emptyList(),
+    onToggleTrace: (Contact) -> Unit = {},
 ) {
     val nodes = remember(self, contacts, heard) { collectNodes(self, contacts, heard) }
     // Caches so re-clustering on pan/zoom reuses marker bitmaps.
     val nodeIcons = remember { mutableMapOf<String, NodeIcon>() }
     val clusterIcons = remember { mutableMapOf<Int, Drawable>() }
+    val badgeIcons = remember { mutableMapOf<String, Drawable>() }
     val holder = remember { MapHolder() }
     holder.nodes = nodes
+    holder.traceMode = traceMode
+    holder.tracePrefixes = tracePath.map { it.keyPrefixHex }
+    holder.onToggleTrace = onToggleTrace
     var selected by remember { mutableStateOf<MapNode?>(null) }
     holder.onSelect = { selected = it }
 
@@ -85,16 +91,16 @@ fun MapContent(
                     // Re-cluster as the viewport changes (clusters depend on screen positions).
                     addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
-                            rebuildOverlays(this@apply, holder.nodes, nodeIcons, clusterIcons, holder.onSelect); return false
+                            rebuildOverlays(this@apply, holder, nodeIcons, clusterIcons, badgeIcons); return false
                         }
                         override fun onZoom(event: ZoomEvent?): Boolean {
-                            rebuildOverlays(this@apply, holder.nodes, nodeIcons, clusterIcons, holder.onSelect); return false
+                            rebuildOverlays(this@apply, holder, nodeIcons, clusterIcons, badgeIcons); return false
                         }
                     })
                 }
             },
             update = { map ->
-                rebuildOverlays(map, nodes, nodeIcons, clusterIcons, holder.onSelect)
+                rebuildOverlays(map, holder, nodeIcons, clusterIcons, badgeIcons)
                 if (!holder.centered && nodes.isNotEmpty()) {
                     map.controller.setCenter(GeoPoint(nodes[0].lat, nodes[0].lon))
                     if (map.zoomLevelDouble < 5.0) map.controller.setZoom(11.0)
@@ -119,7 +125,8 @@ fun MapContent(
             }
         }
 
-        selected?.let { node ->
+        // Detail sheet only outside trace mode (in trace mode a tap toggles the path).
+        if (!traceMode) selected?.let { node ->
             NodeDetailSheet(
                 name = node.name, type = node.type, isSelf = node.isSelf,
                 contact = node.contact, heard = node.heard, self = self,
@@ -133,160 +140,39 @@ private class MapHolder {
     var nodes: List<MapNode> = emptyList()
     var centered = false
     var onSelect: (MapNode) -> Unit = {}
+    var traceMode = false
+    var tracePrefixes: List<String> = emptyList() // ordered, by contact keyPrefixHex
+    var onToggleTrace: (Contact) -> Unit = {}
 }
 
-// ---- trace path map -------------------------------------------------------
-
-/** One trace hop placed on the map (its node advertised a GPS position). */
-private data class PlacedHop(val label: String, val snrDb: Double, val point: GeoPoint, val isSelf: Boolean)
-
-/**
- * Renders a trace result as a route: each hop that advertised GPS becomes a numbered
- * marker (with its SNR), joined in path order and ending at this node. Hops we can't
- * place (no known position) are reported through [onUnplaced] so the caller can list them.
- */
-@Composable
-fun TracePathMap(
-    self: SelfInfo?,
-    contacts: List<Contact>,
-    result: TraceResult,
-    modifier: Modifier = Modifier,
-    onUnplaced: (List<String>) -> Unit = {},
-) {
-    fun contactFor(hashByte: Int): Contact? = contacts.firstOrNull {
-        it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hashByte &&
-            (it.gpsLat != 0 || it.gpsLon != 0)
-    }
-
-    val placed = remember(self, contacts, result) {
-        val list = mutableListOf<PlacedHop>()
-        result.hops.forEach { h ->
-            contactFor(h.hashByte)?.let { c ->
-                list.add(PlacedHop(c.name.ifBlank { c.keyPrefixHex }, h.snrDb,
-                    GeoPoint(c.gpsLat / 1e6, c.gpsLon / 1e6), isSelf = false))
-            }
-        }
-        if (self != null && (self.advLat != 0 || self.advLon != 0)) {
-            list.add(PlacedHop(self.name.ifBlank { "This node" }, result.finalSnrDb,
-                GeoPoint(self.advLat / 1e6, self.advLon / 1e6), isSelf = true))
-        }
-        list
-    }
-    val unplaced = remember(self, contacts, result) {
-        result.hops.filter { contactFor(it.hashByte) == null }.map { "0x%02X".format(it.hashByte) }
-    }
-    LaunchedEffect(unplaced) { onUnplaced(unplaced) }
-
-    val icons = remember { mutableMapOf<String, NodeIcon>() }
-    val holder = remember { MapHolder() }
-
-    Box(modifier) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                Configuration.getInstance().userAgentValue = ctx.packageName
-                MapView(ctx).apply {
-                    setTileSource(TileSourceFactory.MAPNIK)
-                    setMultiTouchControls(true)
-                    controller.setZoom(3.0)
-                }
-            },
-            update = { map ->
-                map.overlays.clear()
-                if (placed.size >= 2) {
-                    map.overlays.add(Polyline(map).apply {
-                        setPoints(placed.map { it.point })
-                        outlinePaint.color = 0xFF3FC7E8.toInt()
-                        outlinePaint.strokeWidth = 6f
-                    })
-                }
-                placed.forEachIndexed { i, hop ->
-                    val badge = if (hop.isSelf) "✓" else "${i + 1}"
-                    val key = "$badge|${hop.label}|${hop.snrDb}"
-                    val ni = icons.getOrPut(key) {
-                        makeTraceIcon(map.resources, badge,
-                            "${hop.label}  ${"%.1f".format(hop.snrDb)} dB",
-                            if (hop.isSelf) 0xFF3FC7E8.toInt() else 0xFF43A047.toInt())
-                    }
-                    map.overlays.add(Marker(map).apply {
-                        position = hop.point
-                        setAnchor(Marker.ANCHOR_CENTER, ni.anchorV)
-                        setIcon(ni.drawable)
-                    })
-                }
-                if (!holder.centered && placed.isNotEmpty()) {
-                    if (placed.size == 1) {
-                        map.controller.setCenter(placed[0].point); map.controller.setZoom(13.0)
-                    } else {
-                        val bb = BoundingBox.fromGeoPoints(placed.map { it.point })
-                        map.post { map.zoomToBoundingBox(bb.increaseByScale(1.4f), false, 64) }
-                    }
-                    holder.centered = true
-                }
-                map.invalidate()
-            },
-            onRelease = { it.onDetach() },
-        )
-        if (placed.isEmpty()) {
-            Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
-            ) {
-                Text("No hop positions known — none of these nodes advertise GPS.",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
-            }
-        }
-    }
-}
-
-private fun makeTraceIcon(res: Resources, badge: String, label: String, color: Int): NodeIcon {
+/** A small numbered/✓ badge drawn over a selected trace node (no label). */
+private fun makeBadgeIcon(res: Resources, text: String, color: Int): Drawable {
     val d = res.displayMetrics.density
-    val diameter = 28f * d
-    val topPad = 2f * d
-    val gap = 3f * d
-    val tLabel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        this.color = 0xFFFFFFFF.toInt(); textAlign = Paint.Align.CENTER
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); textSize = 11f * d
-    }
-    val fm = tLabel.fontMetrics
-    val labelTextH = fm.descent - fm.ascent
-    val labelPadH = 5f * d; val labelPadV = 2.5f * d
-    val labelW = tLabel.measureText(label) + labelPadH * 2
-    val labelH = labelTextH + labelPadV * 2
-    val width = maxOf(diameter + 4f * d, labelW).toInt()
-    val height = (topPad + diameter + gap + labelH).toInt()
-    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val diameter = 22f * d
+    val size = (diameter + 4f * d).toInt()
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val c = Canvas(bmp)
-    val cx = width / 2f
-    val circleCy = topPad + diameter / 2f
-    val r = diameter / 2f
+    val cx = size / 2f; val cy = size / 2f; val r = diameter / 2f
     val p = Paint(Paint.ANTI_ALIAS_FLAG)
-    p.color = 0xFFFFFFFF.toInt(); c.drawCircle(cx, circleCy, r, p)       // white backing ring
-    p.color = color; c.drawCircle(cx, circleCy, r - 1.5f * d, p)        // coloured fill
-
-    val tb = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    p.color = 0xFFFFFFFF.toInt(); c.drawCircle(cx, cy, r, p)            // white ring
+    p.color = color; c.drawCircle(cx, cy, r - 1.5f * d, p)             // coloured fill
+    val t = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.color = 0xFFFFFFFF.toInt(); textAlign = Paint.Align.CENTER
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); textSize = diameter * 0.46f
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); textSize = diameter * 0.5f
     }
-    c.drawText(badge, cx, circleCy - (tb.descent() + tb.ascent()) / 2f, tb)
-
-    val labelTop = circleCy + r + gap
-    val rect = RectF(cx - labelW / 2f, labelTop, cx + labelW / 2f, labelTop + labelH)
-    p.color = 0xE61E2933.toInt(); c.drawRoundRect(rect, 4f * d, 4f * d, p)
-    c.drawText(label, cx, labelTop + labelPadV - fm.ascent, tLabel)
-    return NodeIcon(BitmapDrawable(res, bmp), anchorV = circleCy / height)
+    c.drawText(text, cx, cy - (t.descent() + t.ascent()) / 2f, t)
+    return BitmapDrawable(res, bmp)
 }
 
 /** Greedy screen-space clustering: nodes within [CLUSTER_RADIUS_DP] merge into a count pill. */
 private fun rebuildOverlays(
     map: MapView,
-    nodes: List<MapNode>,
+    holder: MapHolder,
     nodeIcons: MutableMap<String, NodeIcon>,
     clusterIcons: MutableMap<Int, Drawable>,
-    onSelect: (MapNode) -> Unit,
+    badgeIcons: MutableMap<String, Drawable>,
 ) {
+    val nodes = holder.nodes
     map.overlays.clear()
     if (nodes.isEmpty()) { map.invalidate(); return }
 
@@ -310,7 +196,11 @@ private fun rebuildOverlays(
                 position = GeoPoint(n.lat, n.lon)
                 setAnchor(Marker.ANCHOR_CENTER, ni.anchorV) // geo point sits at the circle centre
                 setIcon(ni.drawable)
-                setOnMarkerClickListener { _, _ -> onSelect(n); true } // show our own detail sheet
+                setOnMarkerClickListener { _, _ ->
+                    val c = n.contact
+                    if (holder.traceMode && c != null) holder.onToggleTrace(c) else holder.onSelect(n)
+                    true
+                }
             })
         } else {
             val lat = group.sumOf { nodes[it].lat } / group.size
@@ -325,6 +215,29 @@ private fun rebuildOverlays(
                     mv.controller.setZoom(mv.zoomLevelDouble + 2.0)
                     true
                 }
+            })
+        }
+    }
+
+    // Trace overlay: link the selected nodes (in order) → this node, with numbered badges.
+    if (holder.traceMode) {
+        val ordered = holder.tracePrefixes.mapNotNull { pre -> nodes.firstOrNull { it.contact?.keyPrefixHex == pre } }
+        val line = ordered.map { GeoPoint(it.lat, it.lon) }.toMutableList()
+        nodes.firstOrNull { it.isSelf }?.let { line.add(GeoPoint(it.lat, it.lon)) }
+        if (line.size >= 2) {
+            map.overlays.add(Polyline(map).apply {
+                setPoints(line)
+                outlinePaint.color = 0xFF3FC7E8.toInt()
+                outlinePaint.strokeWidth = 7f
+            })
+        }
+        ordered.forEachIndexed { i, n ->
+            val icon = badgeIcons.getOrPut("${i + 1}") { makeBadgeIcon(res, "${i + 1}", 0xFF3FC7E8.toInt()) }
+            map.overlays.add(Marker(map).apply {
+                position = GeoPoint(n.lat, n.lon)
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                setIcon(icon)
+                setOnMarkerClickListener { _, _ -> n.contact?.let { holder.onToggleTrace(it) }; true }
             })
         }
     }

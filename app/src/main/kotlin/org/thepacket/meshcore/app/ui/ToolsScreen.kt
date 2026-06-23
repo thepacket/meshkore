@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -19,12 +20,13 @@ import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -106,62 +108,75 @@ private fun ToolHeader(title: String, onBack: () -> Unit) {
 @Composable
 private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfInfo?, onBack: () -> Unit) {
     val result by session.traceResult.collectAsStateWithLifecycle()
-    val repeaters = remember(contacts) { contacts.filter { it.isRepeater } }
+    val heard by session.heard.collectAsStateWithLifecycle()
     val selected = remember { mutableStateListOf<Contact>() } // ordered path
-    var unplaced by remember { mutableStateOf<List<String>>(emptyList()) }
+    val r = result
+    // Repeaters in the path with no advertised position can't be drawn on the map.
+    val unplaced = selected.filter { it.gpsLat == 0 && it.gpsLon == 0 }.map { it.name.ifBlank { it.keyPrefixHex } }
 
-    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ToolHeader("Trace path", onBack)
+    Box(Modifier.fillMaxSize()) {
+        MapContent(
+            self = self, contacts = contacts, heard = heard,
+            modifier = Modifier.fillMaxSize(),
+            traceMode = true,
+            tracePath = selected,
+            onToggleTrace = { c ->
+                val i = selected.indexOfFirst { it.keyPrefixHex == c.keyPrefixHex }
+                if (i >= 0) selected.removeAt(i) else selected.add(c)
+            },
+        )
 
-        val r = result
-        if (r == null) {
-            Text("Select repeaters in path order, then trace.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            Column(
-                Modifier.weight(1f).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                repeaters.forEach { c ->
-                    val idx = selected.indexOf(c)
-                    Card(Modifier.fillMaxWidth().clickable {
-                        if (idx >= 0) selected.remove(c) else selected.add(c)
-                    }) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Checkbox(checked = idx >= 0, onCheckedChange = { if (idx >= 0) selected.remove(c) else selected.add(c) })
-                            Text(c.name.ifBlank { c.keyPrefixHex }, Modifier.weight(1f))
-                            if (idx >= 0) Text("#${idx + 1}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-                if (repeaters.isEmpty()) Text("No repeater contacts to trace through.",
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        // Top bar: back + title (overlaid, the map fills behind it).
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+        ) {
+            Row(Modifier.fillMaxWidth().padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                Text("Trace path", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f))
+                if (selected.isNotEmpty()) TextButton(onClick = { selected.clear() }) { Text("Clear") }
             }
-            Button(
-                onClick = { session.sendTrace(selected.map { it.publicKey[0] }.toByteArray()) },
-                enabled = selected.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Trace ${selected.size} hop(s)") }
-        } else {
-            TracePathMap(self, contacts, r, Modifier.fillMaxWidth().weight(1f),
-                onUnplaced = { unplaced = it })
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Path", style = MaterialTheme.typography.titleMedium)
+        }
+
+        // Bottom panel: instructions + Trace button, or the result legend + New trace.
+        Surface(
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+        ) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (r == null) {
+                    Text(
+                        if (selected.isEmpty()) "Tap repeaters on the map to build the path (in order), then trace."
+                        else "Path: " + selected.joinToString(" → ") { it.name.ifBlank { it.keyPrefixHex } } + " → this node",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                    if (unplaced.isNotEmpty()) Text(
+                        "No map position (still traceable): ${unplaced.joinToString(", ")}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                    Button(
+                        onClick = { session.sendTrace(selected.map { it.publicKey[0] }.toByteArray()) },
+                        enabled = selected.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Trace ${selected.size} hop(s)") }
+                } else {
+                    Text("Result", style = MaterialTheme.typography.titleMedium)
                     r.hops.forEachIndexed { i, h ->
                         val name = contacts.firstOrNull { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == h.hashByte }
                             ?.name?.ifBlank { null } ?: "0x%02X".format(h.hashByte)
                         kvRowMono("${i + 1}. $name", "SNR ${h.snrDb} dB")
                     }
                     kvRowMono("→ this node", "SNR ${r.finalSnrDb} dB")
-                    if (unplaced.isNotEmpty()) Text(
-                        "No map position for: ${unplaced.joinToString(", ")}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    )
+                    Button(onClick = { session.clearTrace() }, modifier = Modifier.fillMaxWidth()) { Text("New trace") }
                 }
             }
-            Button(onClick = { session.clearTrace() }, modifier = Modifier.fillMaxWidth()) { Text("New trace") }
         }
     }
 }
