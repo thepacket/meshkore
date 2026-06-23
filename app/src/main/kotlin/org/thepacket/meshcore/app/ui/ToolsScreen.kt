@@ -4,20 +4,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -105,14 +110,13 @@ private fun ToolHeader(title: String, onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfInfo?, onBack: () -> Unit) {
     val result by session.traceResult.collectAsStateWithLifecycle()
     val heard by session.heard.collectAsStateWithLifecycle()
-    val selected = remember { mutableStateListOf<Contact>() } // ordered path
+    val selected = remember { mutableStateListOf<Contact>() } // ordered path (duplicates allowed)
     val r = result
-    // Repeaters in the path with no advertised position can't be drawn on the map.
-    val unplaced = selected.filter { it.gpsLat == 0 && it.gpsLon == 0 }.map { it.name.ifBlank { it.keyPrefixHex } }
 
     Box(Modifier.fillMaxSize()) {
         MapContent(
@@ -120,10 +124,7 @@ private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfI
             modifier = Modifier.fillMaxSize(),
             traceMode = true,
             tracePath = selected,
-            onToggleTrace = { c ->
-                val i = selected.indexOfFirst { it.keyPrefixHex == c.keyPrefixHex }
-                if (i >= 0) selected.removeAt(i) else selected.add(c)
-            },
+            onAddTrace = { c -> selected.add(c) }, // tap appends; the same node may repeat
         )
 
         // Top bar: back + title (overlaid, the map fills behind it).
@@ -151,16 +152,21 @@ private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfI
             ) {
                 if (r == null) {
                     Text(
-                        if (selected.isEmpty()) "Tap repeaters on the map to build the path (in order), then trace."
-                        else "Path: " + selected.joinToString(" → ") { it.name.ifBlank { it.keyPrefixHex } } + " → this node",
+                        "Tap a node to add it to the path (taps add; a node may repeat). Long-press a node for its details.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     )
-                    if (unplaced.isNotEmpty()) Text(
-                        "No map position (still traceable): ${unplaced.joinToString(", ")}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                    )
+                    if (selected.isNotEmpty()) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            selected.forEachIndexed { i, c ->
+                                AssistChip(
+                                    onClick = { selected.removeAt(i) },
+                                    label = { Text("${i + 1}. ${c.name.ifBlank { c.keyPrefixHex }}") },
+                                    trailingIcon = { Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(16.dp)) },
+                                )
+                            }
+                        }
+                    }
                     Button(
                         onClick = { session.sendTrace(selected.map { it.publicKey[0] }.toByteArray()) },
                         enabled = selected.isNotEmpty(),

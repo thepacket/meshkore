@@ -28,11 +28,12 @@ import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
+import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Polyline
 import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
@@ -60,11 +61,11 @@ fun MapContent(
     contacts: List<Contact>,
     heard: List<HeardEntry>,
     modifier: Modifier = Modifier,
-    // Trace mode: the same map, but tapping a node with a contact toggles it into an
-    // ordered path ([tracePath]) which is drawn as a cyan link ending at this node.
+    // Trace mode: the same map, but tapping a node with a contact appends it to the
+    // ordered path ([tracePath], duplicates allowed); long-press shows its details.
     traceMode: Boolean = false,
     tracePath: List<Contact> = emptyList(),
-    onToggleTrace: (Contact) -> Unit = {},
+    onAddTrace: (Contact) -> Unit = {},
 ) {
     val nodes = remember(self, contacts, heard) { collectNodes(self, contacts, heard) }
     // Caches so re-clustering on pan/zoom reuses marker bitmaps.
@@ -74,10 +75,11 @@ fun MapContent(
     val holder = remember { MapHolder() }
     holder.nodes = nodes
     holder.traceMode = traceMode
-    holder.tracePrefixes = tracePath.map { it.keyPrefixHex }
-    holder.onToggleTrace = onToggleTrace
+    holder.traceCounts = tracePath.groupingBy { it.keyPrefixHex }.eachCount()
+    holder.onAddTrace = onAddTrace
     var selected by remember { mutableStateOf<MapNode?>(null) }
     holder.onSelect = { selected = it }
+    holder.onInfo = { selected = it }
 
     Box(modifier.fillMaxSize()) {
         AndroidView(
@@ -88,6 +90,15 @@ fun MapContent(
                     setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
                     controller.setZoom(3.0)
+                    // Long-press anywhere → show the nearest node's details (trace mode).
+                    holder.events = MapEventsOverlay(object : MapEventsReceiver {
+                        override fun singleTapConfirmedHelper(p: GeoPoint?) = false
+                        override fun longPressHelper(p: GeoPoint?): Boolean {
+                            if (!holder.traceMode || p == null) return false
+                            val n = nearestNode(this@apply, holder.nodes, p) ?: return false
+                            holder.onInfo(n); return true
+                        }
+                    })
                     // Re-cluster as the viewport changes (clusters depend on screen positions).
                     addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
@@ -125,8 +136,7 @@ fun MapContent(
             }
         }
 
-        // Detail sheet only outside trace mode (in trace mode a tap toggles the path).
-        if (!traceMode) selected?.let { node ->
+        selected?.let { node ->
             NodeDetailSheet(
                 name = node.name, type = node.type, isSelf = node.isSelf,
                 contact = node.contact, heard = node.heard, self = self,
@@ -140,9 +150,11 @@ private class MapHolder {
     var nodes: List<MapNode> = emptyList()
     var centered = false
     var onSelect: (MapNode) -> Unit = {}
+    var onInfo: (MapNode) -> Unit = {}
     var traceMode = false
-    var tracePrefixes: List<String> = emptyList() // ordered, by contact keyPrefixHex
-    var onToggleTrace: (Contact) -> Unit = {}
+    var traceCounts: Map<String, Int> = emptyMap() // keyPrefixHex -> times in path
+    var onAddTrace: (Contact) -> Unit = {}
+    var events: MapEventsOverlay? = null
 }
 
 /** A small numbered/✓ badge drawn over a selected trace node (no label). */
@@ -174,6 +186,8 @@ private fun rebuildOverlays(
 ) {
     val nodes = holder.nodes
     map.overlays.clear()
+    // Keep the long-press receiver at the bottom so markers get taps first.
+    if (holder.traceMode) holder.events?.let { map.overlays.add(it) }
     if (nodes.isEmpty()) { map.invalidate(); return }
 
     val res = map.resources
@@ -198,7 +212,7 @@ private fun rebuildOverlays(
                 setIcon(ni.drawable)
                 setOnMarkerClickListener { _, _ ->
                     val c = n.contact
-                    if (holder.traceMode && c != null) holder.onToggleTrace(c) else holder.onSelect(n)
+                    if (holder.traceMode && c != null) holder.onAddTrace(c) else holder.onSelect(n)
                     true
                 }
             })
@@ -219,26 +233,19 @@ private fun rebuildOverlays(
         }
     }
 
-    // Trace overlay: link the selected nodes (in order) → this node, with numbered badges.
-    if (holder.traceMode) {
-        val ordered = holder.tracePrefixes.mapNotNull { pre -> nodes.firstOrNull { it.contact?.keyPrefixHex == pre } }
-        val line = ordered.map { GeoPoint(it.lat, it.lon) }.toMutableList()
-        nodes.firstOrNull { it.isSelf }?.let { line.add(GeoPoint(it.lat, it.lon)) }
-        if (line.size >= 2) {
-            map.overlays.add(Polyline(map).apply {
-                setPoints(line)
-                outlinePaint.color = 0xFF3FC7E8.toInt()
-                outlinePaint.strokeWidth = 7f
-            })
-        }
-        ordered.forEachIndexed { i, n ->
-            val icon = badgeIcons.getOrPut("${i + 1}") { makeBadgeIcon(res, "${i + 1}", 0xFF3FC7E8.toInt()) }
-            map.overlays.add(Marker(map).apply {
-                position = GeoPoint(n.lat, n.lon)
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                setIcon(icon)
-                setOnMarkerClickListener { _, _ -> n.contact?.let { holder.onToggleTrace(it) }; true }
-            })
+    // Trace overlay: mark each selected node with how many times it's in the path.
+    if (holder.traceMode && holder.traceCounts.isNotEmpty()) {
+        nodes.forEach { n ->
+            val count = n.contact?.let { holder.traceCounts[it.keyPrefixHex] } ?: 0
+            if (count > 0) {
+                val icon = badgeIcons.getOrPut("$count") { makeBadgeIcon(res, "$count", 0xFF3FC7E8.toInt()) }
+                map.overlays.add(Marker(map).apply {
+                    position = GeoPoint(n.lat, n.lon)
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    setIcon(icon)
+                    setOnMarkerClickListener { _, _ -> n.contact?.let { holder.onAddTrace(it) }; true }
+                })
+            }
         }
     }
     map.invalidate()
@@ -251,6 +258,20 @@ private class NodeIcon(val drawable: Drawable, val anchorV: Float)
 
 private fun dist(a: Point, b: Point): Double =
     hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble())
+
+/** Nearest plotted node to a tapped geo point, within a finger-sized radius (or null). */
+private fun nearestNode(map: MapView, nodes: List<MapNode>, p: GeoPoint): MapNode? {
+    val proj = map.projection
+    val tap = proj.toPixels(p, null)
+    val thresh = 44f * map.resources.displayMetrics.density
+    var best: MapNode? = null
+    var bestD = Double.MAX_VALUE
+    for (n in nodes) {
+        val d = dist(tap, proj.toPixels(GeoPoint(n.lat, n.lon), null))
+        if (d < thresh && d < bestD) { bestD = d; best = n }
+    }
+    return best
+}
 
 private fun nodeKey(n: MapNode): String = "${n.type}|${n.isSelf}|${n.name}"
 
