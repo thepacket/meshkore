@@ -12,8 +12,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
 
 @Composable
@@ -46,15 +48,20 @@ fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Mod
     Box(modifier.fillMaxSize()) {
         when (open) {
             "trace" -> TraceTool(session, contacts, self) { open = null }
-            "discover" -> DiscoverTool(session, self) { open = null }
+            "repeaters" -> DiscoverTool(session, self, ContactType.REPEATER,
+                "Discover repeaters", "No nearby repeaters yet.") { open = null }
+            "sensors" -> DiscoverTool(session, self, ContactType.SENSOR,
+                "Discover sensors", "No nearby sensors yet.") { open = null }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ToolRow(Icons.Default.Route, "Trace path",
                     "Trace a path through chosen repeaters; see each hop's SNR.") { open = "trace" }
-                ToolRow(Icons.Default.Podcasts, "Discover nearby nodes",
-                    "Announce to direct (one-hop) neighbours and list them.") { open = "discover" }
+                ToolRow(Icons.Default.Router, "Discover repeaters",
+                    "Announce and list nearby (one-hop) repeaters.") { open = "repeaters" }
+                ToolRow(Icons.Default.Sensors, "Discover sensors",
+                    "Announce and list nearby (one-hop) sensors.") { open = "sensors" }
             }
         }
     }
@@ -137,23 +144,31 @@ private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfI
 }
 
 @Composable
-private fun DiscoverTool(session: MeshSession, self: SelfInfo?, onBack: () -> Unit) {
+private fun DiscoverTool(
+    session: MeshSession,
+    self: SelfInfo?,
+    typeFilter: Int,
+    title: String,
+    emptyMsg: String,
+    onBack: () -> Unit,
+) {
     // One-hop neighbours, tracked in the session (cleared on announce, fills from direct adverts).
-    val neighbours by session.neighbours.collectAsStateWithLifecycle()
+    val allNeighbours by session.neighbours.collectAsStateWithLifecycle()
+    val neighbours = allNeighbours.filter { it.type == typeFilter }
     val heard by session.heard.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<Contact?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ToolHeader("Discover nearby nodes", onBack)
-        Text("“Nearby” = nodes reachable directly, with no repeater in between (one hop).",
+        ToolHeader(title, onBack)
+        Text("Reachable directly, with no repeater in between (one hop).",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         OutlinedButton(onClick = { session.announceZeroHop() }, modifier = Modifier.fillMaxWidth()) {
-            Text("Announce to neighbours (zero-hop advert)")
+            Text("Announce (zero-hop advert)")
         }
         if (neighbours.isEmpty()) {
             Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text("No direct neighbours yet.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                Text(emptyMsg, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             }
         } else {
             neighbours.forEach { c ->
