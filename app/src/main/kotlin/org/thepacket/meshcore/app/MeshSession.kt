@@ -429,9 +429,21 @@ class MeshSession(
 
     /** Create or replace a channel slot (optimistically reflect it locally). */
     fun setChannel(index: Int, name: String, secret: ByteArray) {
+        val key = secret.copyOf(16)
+        val prev = _channels.value.firstOrNull { it.index == index }
+        // The key identifies the channel: if this slot is becoming a *different* channel
+        // (new slot, or the key changed), drop the old slot's chat history so the new
+        // channel doesn't inherit the previous one's messages. A pure rename keeps history.
+        val sameChannel = prev != null && prev.secret.isNotEmpty() && prev.secret.contentEquals(key)
+        if (!sameChannel) {
+            val cid = Conversation.channelId(index)
+            if (_messages.value.containsKey(cid)) {
+                _messages.update { it - cid }
+                chatStore?.save(_messages.value)
+            }
+        }
         _channels.update { list ->
-            (list.filterNot { it.index == index } + ChannelEntry(index, name, secret.copyOf(16)))
-                .sortedBy { it.index }
+            (list.filterNot { it.index == index } + ChannelEntry(index, name, key)).sortedBy { it.index }
         }
         scope.launch { runCatching { link.send(Requests.setChannel(index, name, secret)) } }
     }
