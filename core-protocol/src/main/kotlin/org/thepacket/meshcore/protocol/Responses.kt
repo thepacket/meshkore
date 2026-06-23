@@ -276,13 +276,24 @@ object FrameDecoder {
         )
     }
 
-    // PUSH_CODE_TRACE_DATA: tag(u32) finalSnrQ(i8) then pairs of (hashByte, snrQ).
-    // TODO: confirm hop record layout/ordering against MyMesh::onTraceRecv.
+    // PUSH_CODE_TRACE_DATA (confirmed vs MyMesh::onTraceRecv):
+    //   reserved(1) pathLen(1) flags(1) tag(u32) auth(u32)
+    //   pathHashes(pathLen) pathSnrs(pathLen >> (flags&3)) finalSnr(i8, to this node)
     private fun parseTrace(r: FrameReader): TraceResult {
+        r.u8() // reserved
+        val pathLen = if (r.remaining > 0) r.u8() else 0
+        val flags = if (r.remaining > 0) r.u8() else 0
+        val pathSz = flags and 0x03
         val tag = r.u32()
+        r.u32() // auth code (unused here)
+        val hashes = r.bytes(minOf(pathLen, r.remaining))
+        val snrCount = pathLen shr pathSz
+        val snrs = r.bytes(minOf(snrCount, r.remaining))
         val finalSnr = if (r.remaining > 0) r.i8() else 0
-        val hops = ArrayList<TraceHop>()
-        while (r.remaining >= 2) hops.add(TraceHop(r.u8(), r.i8()))
+        val hops = hashes.indices.map { idx ->
+            val si = idx shr pathSz
+            TraceHop(hashes[idx].toInt() and 0xFF, if (si < snrs.size) snrs[si].toInt() else 0)
+        }
         return TraceResult(tag, hops, finalSnr)
     }
 

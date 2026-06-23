@@ -22,7 +22,7 @@ sealed interface Screen {
 }
 
 /** Bottom-nav tabs within the connected (Main) screen. */
-enum class MainTab { Chats, Heard, Packets, Stats, Map, Settings }
+enum class MainTab { Chats, Heard, Packets, Stats, Map, Tools, Settings }
 
 /** Connection / scanning state (chat + instrumentation state live in [MeshSession]). */
 data class UiState(

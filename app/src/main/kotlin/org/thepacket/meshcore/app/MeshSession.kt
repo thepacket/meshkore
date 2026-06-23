@@ -30,6 +30,7 @@ import org.thepacket.meshcore.protocol.Requests
 import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.StatsType
+import org.thepacket.meshcore.protocol.TraceResult
 import org.thepacket.meshcore.protocol.TuningParams
 import java.util.ArrayDeque
 
@@ -111,6 +112,10 @@ class MeshSession(
     private val _telemetry = MutableStateFlow<List<Lpp.Reading>>(emptyList())
     val telemetry: StateFlow<List<Lpp.Reading>> = _telemetry.asStateFlow()
 
+    /** Latest trace-path result (Tools → Trace path). */
+    private val _traceResult = MutableStateFlow<TraceResult?>(null)
+    val traceResult: StateFlow<TraceResult?> = _traceResult.asStateFlow()
+
     /** Emitted after each settings write (OK/ERR) for UI feedback. */
     private val _settingsResult = MutableSharedFlow<SettingsResult>(extraBufferCapacity = 8)
     val settingsResult: SharedFlow<SettingsResult> = _settingsResult.asSharedFlow()
@@ -159,6 +164,17 @@ class MeshSession(
     /** Re-request this node's own telemetry. */
     fun refreshTelemetry() = scope.launch { runCatching { link.send(Requests.selfTelemetry()) } }.let {}
 
+    /** Trace a path through the given ordered hop hashes (each = a node's public-key prefix byte). */
+    fun sendTrace(path: ByteArray) {
+        if (path.isEmpty()) return
+        _traceResult.value = null
+        val tag = System.nanoTime() and 0xFFFFFFFFL
+        scope.launch { runCatching { link.send(Requests.sendTracePath(tag, path)) } }
+    }
+
+    /** Announce ourselves to direct neighbours with a zero-hop advert (Discover nearby nodes). */
+    fun announceZeroHop() = scope.launch { runCatching { link.send(Requests.sendSelfAdvert(flood = false)) } }.let {}
+
     private fun dbg(msg: String) {
         Log.d(TAG, msg)
         val line = "${java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())}  $msg"
@@ -182,6 +198,7 @@ class MeshSession(
         _deviceInfo.value = null
         _battStorage.value = null
         _telemetry.value = emptyList()
+        _traceResult.value = null
         pendingSettings.clear()
         lastAdvertSnrQ = null; lastAdvertRssi = null
         contactAccumulator.clear()
@@ -414,6 +431,7 @@ class MeshSession(
             is Incoming.Device -> _deviceInfo.value = f.info
             is Incoming.Battery -> _battStorage.value = f.info
             is Incoming.Telemetry -> _telemetry.value = f.readings
+            is Incoming.Trace -> _traceResult.value = f.result
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
             is Incoming.RxPacket -> {

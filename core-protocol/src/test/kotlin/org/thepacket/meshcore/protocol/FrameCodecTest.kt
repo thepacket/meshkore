@@ -420,6 +420,37 @@ class FrameCodecTest {
         assertEquals(1009.3, rs[3].values[0], 1e-6)
     }
 
+    @Test fun sendTracePathShape() {
+        val path = byteArrayOf(0xA1.toByte(), 0xB2.toByte())
+        val f = Requests.sendTracePath(tag = 0x01020304, path = path)
+        val r = FrameReader(f)
+        assertEquals(Cmd.SEND_TRACE_PATH, r.u8())
+        assertEquals(0x01020304L, r.u32()) // tag
+        assertEquals(0L, r.u32())          // auth
+        assertEquals(0, r.u8())            // flags
+        assertArrayEquals(path, r.bytes(2))
+    }
+
+    @Test fun decodeTraceData() {
+        // pathLen=2, flags=0 (one snr/hop): hops AA(snr 8dB=32), BB(snr 6dB=24); final 10dB=40
+        val frame = FrameWriter()
+            .u8(Push.TRACE_DATA).u8(0)        // code, reserved
+            .u8(2).u8(0)                       // pathLen, flags
+            .u32(0xDEADBEEFL).u32(0)           // tag, auth
+            .u8(0xAA).u8(0xBB)                 // path hashes
+            .u8(32).u8(24)                     // path snrs (*4)
+            .u8(40)                            // final snr (*4)
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.Trace)
+        val t = (d as Incoming.Trace).result
+        assertEquals(0xDEADBEEFL, t.tag)
+        assertEquals(2, t.hops.size)
+        assertEquals(0xAA, t.hops[0].hashByte); assertEquals(8.0, t.hops[0].snrDb, 1e-9)
+        assertEquals(0xBB, t.hops[1].hashByte); assertEquals(6.0, t.hops[1].snrDb, 1e-9)
+        assertEquals(10.0, t.finalSnrDb, 1e-9)
+    }
+
     @Test fun unknownCodeBecomesRawNotCrash() {
         val decoded = FrameDecoder.decode(byteArrayOf(0x7F, 1, 2, 3))
         assertTrue(decoded is Incoming.Raw)

@@ -159,9 +159,13 @@ object Requests {
     fun logout(pubKeyPrefix: ByteArray): ByteArray =
         FrameWriter().u8(Cmd.LOGOUT).bytes(pubKeyPrefix.copyOf(6)).build()
 
-    /** Trace-route request. `tag` is a random u32 used to correlate the result. */
-    fun sendTracePath(pubKeyPrefix: ByteArray, tag: Long): ByteArray =
-        FrameWriter().u8(Cmd.SEND_TRACE_PATH).u32(tag).bytes(pubKeyPrefix.copyOf(6)).build()
+    /**
+     * Trace a path through specific hops. Layout: [cmd, tag(u32), auth(u32), flags(1), path...].
+     * `path` is the ordered list of 1-byte hop hashes (each a node's public-key prefix); the
+     * firmware requires at least one path byte. `tag` correlates the PUSH_CODE_TRACE_DATA reply.
+     */
+    fun sendTracePath(tag: Long, path: ByteArray, auth: Long = 0, flags: Int = 0): ByteArray =
+        FrameWriter().u8(Cmd.SEND_TRACE_PATH).u32(tag).u32(auth).u8(flags).bytes(path).build()
 
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
