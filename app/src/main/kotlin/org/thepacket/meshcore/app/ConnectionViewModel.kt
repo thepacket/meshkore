@@ -67,8 +67,14 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 scanner.scan().collect { found ->
                     _ui.update { st ->
-                        val merged = (st.devices.filterNot { it.device.address == found.device.address } + found)
-                            .sortedByDescending { it.rssi }
+                        // Keep discovery order stable while scanning: refresh an existing
+                        // device's RSSI in place, append newly-seen ones at the bottom.
+                        val idx = st.devices.indexOfFirst { it.device.address == found.device.address }
+                        val merged = if (idx >= 0) {
+                            st.devices.toMutableList().also { it[idx] = found }
+                        } else {
+                            st.devices + found
+                        }
                         st.copy(devices = merged)
                     }
                 }
