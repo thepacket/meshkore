@@ -32,7 +32,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,9 +46,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
+import org.thepacket.meshcore.protocol.DiscoveredNode
 import org.thepacket.meshcore.protocol.SelfInfo
 
 @Composable
@@ -57,28 +61,15 @@ fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Mod
     Box(modifier.fillMaxSize()) {
         when (open) {
             "trace" -> TraceTool(session, contacts, self) { open = null }
-            "companions" -> DiscoverTool(session, self, ContactType.CHAT,
-                "Discover companions", "No nearby companions yet.") { open = null }
-            "repeaters" -> DiscoverTool(session, self, ContactType.REPEATER,
-                "Discover repeaters", "No nearby repeaters yet.") { open = null }
-            "rooms" -> DiscoverTool(session, self, ContactType.ROOM,
-                "Discover room servers", "No nearby room servers yet.") { open = null }
-            "sensors" -> DiscoverTool(session, self, ContactType.SENSOR,
-                "Discover sensors", "No nearby sensors yet.") { open = null }
+            "discover" -> DiscoverTool(session, self) { open = null }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 ToolRow(Icons.Default.Route, "Trace path",
                     "Trace a path through chosen repeaters; see each hop's SNR.") { open = "trace" }
-                ToolRow(Icons.Default.Person, "Discover companions",
-                    "Announce and list nearby (one-hop) companion nodes.") { open = "companions" }
-                ToolRow(Icons.Default.Router, "Discover repeaters",
-                    "Announce and list nearby (one-hop) repeaters.") { open = "repeaters" }
-                ToolRow(Icons.Default.MeetingRoom, "Discover room servers",
-                    "Announce and list nearby (one-hop) room servers.") { open = "rooms" }
-                ToolRow(Icons.Default.Sensors, "Discover sensors",
-                    "Announce and list nearby (one-hop) sensors.") { open = "sensors" }
+                ToolRow(Icons.Default.Sensors, "Discover nodes",
+                    "Find nearby (one-hop) nodes — repeaters, room servers, sensors and companions.") { open = "discover" }
             }
         }
     }
@@ -191,48 +182,75 @@ private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfI
     }
 }
 
+// Bitmask of every node type to ask for in a discovery request (1 shl ContactType.*).
+private val ALL_NODE_TYPES =
+    (1 shl ContactType.CHAT) or (1 shl ContactType.REPEATER) or
+        (1 shl ContactType.ROOM) or (1 shl ContactType.SENSOR)
+
 @Composable
 private fun DiscoverTool(
     session: MeshSession,
     self: SelfInfo?,
-    typeFilter: Int,
-    title: String,
-    emptyMsg: String,
     onBack: () -> Unit,
 ) {
-    // One-hop neighbours, tracked in the session (cleared on announce, fills from direct adverts).
-    val allNeighbours by session.neighbours.collectAsStateWithLifecycle()
-    val neighbours = allNeighbours.filter { it.type == typeFilter }
+    // Blind, zero-hop node-discovery: direct neighbours answer our request. The list is only
+    // (re)populated when the user taps Discover — never cleared automatically.
+    val discovered by session.discovered.collectAsStateWithLifecycle()
+    val contacts by session.contacts.collectAsStateWithLifecycle()
     val heard by session.heard.collectAsStateWithLifecycle()
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
-    var selected by remember { mutableStateOf<Contact?>(null) }
+    var selected by remember { mutableStateOf<DiscoveredNode?>(null) }
+    var autoRefresh by remember { mutableStateOf(false) }
+
+    // Periodic discovery runs only while this screen is open (the effect is cancelled on leave).
+    // 60s stays within the firmware's responder rate-limit (4 per 2 min) and is airtime-frugal.
+    LaunchedEffect(autoRefresh) {
+        if (!autoRefresh) return@LaunchedEffect
+        while (true) {
+            session.discoverNodes(ALL_NODE_TYPES)
+            delay(60_000)
+        }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ToolHeader(title, onBack)
-        val hint = if (typeFilter == ContactType.CHAT) {
-            // Companions don't beacon periodically (unlike repeaters/sensors/room servers),
-            // so they only appear if they advertise while you're listening.
-            "Reachable directly, with no repeater in between (one hop). Companions don't " +
-                "advertise automatically — each one must Announce on its own device to appear here."
-        } else {
-            "Reachable directly, with no repeater in between (one hop)."
-        }
-        Text(hint, style = MaterialTheme.typography.bodySmall,
+        ToolHeader("Discover nodes", onBack)
+        Text("Sends a zero-hop discovery request; direct neighbours answer. Replies can take a few seconds.",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        OutlinedButton(onClick = { session.announceZeroHop() }, modifier = Modifier.fillMaxWidth()) {
-            Text("Announce (zero-hop advert)")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { session.discoverNodes(ALL_NODE_TYPES) }, modifier = Modifier.weight(1f)) {
+                Text("Discover")
+            }
+            OutlinedButton(
+                onClick = { session.clearDiscovered() },
+                modifier = Modifier.weight(1f),
+                enabled = discovered.isNotEmpty(),
+            ) { Text("Clear") }
         }
-        if (neighbours.isEmpty()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Switch(checked = autoRefresh, onCheckedChange = { autoRefresh = it })
+            Text("Auto-refresh every 60s", style = MaterialTheme.typography.bodyMedium)
+        }
+        if (discovered.isEmpty()) {
             Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                Text(emptyMsg, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                Text("No nodes discovered yet. Tap Discover.",
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             }
         } else {
-            neighbours.forEach { c ->
-                Card(Modifier.fillMaxWidth().clickable { selected = c }) {
-                    Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(c.name.ifBlank { c.keyPrefixHex }, fontWeight = FontWeight.SemiBold)
-                        Text(if (c.isRepeater) "Repeater" else "Direct",
+            discovered.sortedByDescending { it.snrQ }.forEach { n ->
+                val c = contacts.firstOrNull { it.keyPrefixHex == n.keyPrefixHex }
+                Card(Modifier.fillMaxWidth().clickable { selected = n }) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(c?.name?.ifBlank { null } ?: n.keyPrefixHex, fontWeight = FontWeight.SemiBold)
+                            Text(nodeTypeName(n.type), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary)
+                        }
+                        Text("SNR %.1f dB".format(n.snrDb),
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     }
                 }
@@ -240,19 +258,28 @@ private fun DiscoverTool(
         }
     }
 
-    selected?.let { c ->
+    selected?.let { n ->
+        val c = contacts.firstOrNull { it.keyPrefixHex == n.keyPrefixHex }
         NodeDetailSheet(
-            name = c.name.ifBlank { c.keyPrefixHex },
-            type = c.type,
+            name = c?.name?.ifBlank { null } ?: n.keyPrefixHex,
+            type = n.type,
             isSelf = false,
             contact = c,
-            heard = heard.firstOrNull { it.pubKeyHex.startsWith(c.keyPrefixHex) },
+            heard = heard.firstOrNull { it.pubKeyHex.startsWith(n.keyPrefixHex) },
             self = self,
             onDismiss = { selected = null },
-            onRequestTelemetry = { session.requestTelemetry(c) },
-            telemetry = contactTelemetry[c.keyPrefixHex],
+            onRequestTelemetry = c?.let { { session.requestTelemetry(it) } },
+            telemetry = c?.let { contactTelemetry[it.keyPrefixHex] },
         )
     }
+}
+
+private fun nodeTypeName(type: Int) = when (type) {
+    ContactType.CHAT -> "Companion"
+    ContactType.REPEATER -> "Repeater"
+    ContactType.ROOM -> "Room server"
+    ContactType.SENSOR -> "Sensor"
+    else -> "Node"
 }
 
 @Composable

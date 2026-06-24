@@ -127,6 +127,16 @@ object Push {
     const val CONTACTS_FULL = 0x90
 }
 
+/**
+ * Control-data sub-types (the first payload byte of a CMD_SEND_CONTROL_DATA /
+ * PUSH_CODE_CONTROL_DATA frame). The high nibble is the type; the low nibble carries
+ * flags on a request (bit0 = prefix-only) and the node type on a response.
+ */
+object CtlType {
+    const val NODE_DISCOVER_REQ = 0x80
+    const val NODE_DISCOVER_RESP = 0x90
+}
+
 /** Text message types (TxtDataHelpers.h). */
 object TxtType {
     const val PLAIN = 0

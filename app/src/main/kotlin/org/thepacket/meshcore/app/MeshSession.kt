@@ -13,12 +13,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.random.Random
 import kotlinx.coroutines.launch
 import org.thepacket.meshcore.ble.MeshCoreLink
 import org.thepacket.meshcore.protocol.AutoAddConfig
 import org.thepacket.meshcore.protocol.BattAndStorage
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
+import org.thepacket.meshcore.protocol.DiscoveredNode
 import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.DeviceInfo
@@ -94,9 +96,11 @@ class MeshSession(
     private val _heard = MutableStateFlow<List<HeardEntry>>(emptyList())
     val heard: StateFlow<List<HeardEntry>> = _heard.asStateFlow()
 
-    /** Direct (one-hop) neighbours, for Tools → Discover. Cleared on announce, fills from adverts. */
-    private val _neighbours = MutableStateFlow<List<Contact>>(emptyList())
-    val neighbours: StateFlow<List<Contact>> = _neighbours.asStateFlow()
+    /** Nodes that answered the last blind discovery request (Tools → Discover). */
+    private val _discovered = MutableStateFlow<List<DiscoveredNode>>(emptyList())
+    val discovered: StateFlow<List<DiscoveredNode>> = _discovered.asStateFlow()
+    /** Tag of the in-flight discovery request, to match replies to it. */
+    private var discoverTag = 0L
 
     // ---- settings (config that SELF_INFO doesn't return is fetched on connect) ----
     private val _tuning = MutableStateFlow<TuningParams?>(null)
@@ -202,17 +206,39 @@ class MeshSession(
     /** Discard the last trace result (e.g. to start a new trace). */
     fun clearTrace() { _traceResult.value = null }
 
-    /** Clear the neighbour list and announce ourselves with a zero-hop advert (Discover nearby nodes). */
-    fun announceZeroHop() {
-        _neighbours.value = emptyList()
-        scope.launch { runCatching { link.send(Requests.sendSelfAdvert(flood = false)) } }
+    /**
+     * Send a blind, zero-hop discovery request. Every direct neighbour whose type is in
+     * [typeFilter] (a bitmask of `1 shl ContactType.*`) replies; replies land in [discovered].
+     */
+    fun discoverNodes(typeFilter: Int) {
+        val tag = Random.nextLong(1, 0x1_0000_0000L)
+        discoverTag = tag
+        // Don't clear results — they accumulate across requests until the user clears them.
+        // Ask for full public keys (not just prefixes) so a discovered node can be added as a contact.
+        scope.launch { runCatching { link.send(Requests.nodeDiscoverReq(typeFilter, tag, prefixOnly = false)) } }
     }
 
-    private fun addNeighbour(c: Contact) {
-        if (c.outPathLen != 0) return // only direct (one-hop)
-        _neighbours.update { list ->
-            if (list.any { it.publicKey.contentEquals(c.publicKey) }) list else list + c
-        }
+    /** Empty the discovered-nodes list (Tools → Discover → Clear). */
+    fun clearDiscovered() { _discovered.value = emptyList() }
+
+    /** Add a freshly-discovered node to contacts if we don't already have it (needs the full 32-byte key). */
+    private fun addDiscoveredContact(node: DiscoveredNode) {
+        if (node.pubKey.size < 32) return
+        if (_contacts.value.any { it.publicKey.contentEquals(node.pubKey) }) return
+        val c = Contact(
+            publicKey = node.pubKey,
+            type = node.type,
+            flags = 0,
+            outPathLen = 0, // direct neighbour — discovery is zero-hop
+            outPath = ByteArray(64),
+            name = "", // unknown until an advert provides it
+            lastAdvert = 0,
+            gpsLat = 0,
+            gpsLon = 0,
+            lastMod = System.currentTimeMillis() / 1000,
+        )
+        _contacts.update { list -> (list + c).sortedByDescending { it.lastAdvert } }
+        scope.launch { runCatching { link.send(Requests.addUpdateContact(c)) } }
     }
 
     private fun dbg(msg: String) {
@@ -233,7 +259,8 @@ class MeshSession(
         _packetStats.value = null
         _noiseHistory.value = emptyList()
         _heard.value = emptyList()
-        _neighbours.value = emptyList()
+        _discovered.value = emptyList()
+        discoverTag = 0L
         _tuning.value = null
         _autoAdd.value = null
         _deviceInfo.value = null
@@ -410,7 +437,6 @@ class MeshSession(
     /** Remove a contact from the device store (optimistically drop it locally too). */
     fun removeContact(c: Contact) {
         _contacts.update { list -> list.filterNot { it.publicKey.contentEquals(c.publicKey) } }
-        _neighbours.update { list -> list.filterNot { it.publicKey.contentEquals(c.publicKey) } }
         scope.launch { runCatching { link.send(Requests.removeContact(c.publicKey)) } }
     }
 
@@ -534,7 +560,6 @@ class MeshSession(
             is Incoming.ContactEntry -> contactAccumulator.add(f.contact)
             is Incoming.ContactsEnd -> {
                 _contacts.value = contactAccumulator.sortedByDescending { it.lastAdvert }
-                _neighbours.value = _contacts.value.filter { it.outPathLen == 0 } // seed direct neighbours
                 contactAccumulator.clear()
                 startChannelEnumeration() // then drains messages when done
             }
@@ -582,6 +607,13 @@ class MeshSession(
                 }
             }
             is Incoming.Trace -> _traceResult.value = f.result
+            is Incoming.NodeDiscovered -> if (f.node.tag == discoverTag) {
+                // Replace any prior entry for this node so its SNR refreshes; no duplicates.
+                _discovered.update { list ->
+                    list.filterNot { it.pubKey.contentEquals(f.node.pubKey) } + f.node
+                }
+                addDiscoveredContact(f.node)
+            }
             is Incoming.ExportedContact -> _exportedContact.tryEmit(f.card.toHex())
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
@@ -592,10 +624,7 @@ class MeshSession(
                     lastAdvertSnrQ = f.log.snrQ; lastAdvertRssi = f.log.rssi
                 }
             }
-            is Incoming.AdvertHeard -> {
-                upsertHeardByKey(f.publicKey)
-                _contacts.value.firstOrNull { it.publicKey.contentEquals(f.publicKey) }?.let { addNeighbour(it) }
-            }
+            is Incoming.AdvertHeard -> upsertHeardByKey(f.publicKey)
             is Incoming.NewAdvert -> {
                 // fold the new node into the contact list, and persist it on the device
                 // so discovered nodes survive (esp. in manual-add mode).
@@ -604,7 +633,6 @@ class MeshSession(
                     if (isNewToUs) (list + f.contact).sortedByDescending { it.lastAdvert } else list
                 }
                 if (isNewToUs) scope.launch { runCatching { link.send(Requests.addUpdateContact(f.contact)) } }
-                addNeighbour(f.contact)
                 upsertHeard(
                     HeardEntry(
                         pubKeyHex = f.contact.publicKey.toHex(),

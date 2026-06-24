@@ -322,6 +322,39 @@ class FrameCodecTest {
         assertArrayEquals(key, frame.copyOfRange(4, 36))
     }
 
+    @Test fun nodeDiscoverReqShape() {
+        // Blind request: no pubkey. [cmd, NODE_DISCOVER_REQ|prefixOnly, filter, tag(u32)].
+        val filter = (1 shl ContactType.REPEATER)
+        val frame = Requests.nodeDiscoverReq(filter, tag = 0x11223344, prefixOnly = true)
+        assertEquals(Cmd.SEND_CONTROL_DATA.toByte(), frame[0])
+        assertEquals((CtlType.NODE_DISCOVER_REQ or 1).toByte(), frame[1])
+        assertEquals(filter.toByte(), frame[2])
+        assertArrayEquals(byteArrayOf(0x44, 0x33, 0x22, 0x11), frame.copyOfRange(3, 7)) // tag LE
+        assertEquals(7, frame.size)
+    }
+
+    @Test fun decodeNodeDiscoverResponse() {
+        val pubkey = ByteArray(8) { (0xA0 + it).toByte() }
+        val frame = FrameWriter()
+            .u8(Push.CONTROL_DATA)
+            .u8(40)                                   // our SNR of the reply (*4 = 10 dB)
+            .u8(-95)                                  // RSSI
+            .u8(0)                                    // path_len (zero-hop)
+            .u8(CtlType.NODE_DISCOVER_RESP or ContactType.REPEATER) // type + node type
+            .u8(28)                                   // their SNR of our request (*4 = 7 dB)
+            .u32(0x11223344)                          // echoed tag
+            .bytes(pubkey)
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.NodeDiscovered)
+        val n = (d as Incoming.NodeDiscovered).node
+        assertEquals(ContactType.REPEATER, n.type)
+        assertEquals(0x11223344L, n.tag)
+        assertEquals(10.0, n.snrDb, 1e-9)
+        assertEquals(7, n.inSnrQ / 4)
+        assertArrayEquals(pubkey, n.pubKey)
+    }
+
     @Test fun getStatsRequestShape() {
         assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
             Requests.getStats(StatsType.RADIO))

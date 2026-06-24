@@ -61,6 +61,7 @@ sealed interface Incoming {
     data class Status(val stats: RepeaterStats) : Incoming
     data class Trace(val result: TraceResult) : Incoming
     data class RxPacket(val log: RxLog) : Incoming
+    data class NodeDiscovered(val node: DiscoveredNode) : Incoming
 
     /** PUSH_CODE_TELEMETRY_RESPONSE — decoded LPP readings from [pubKeyPrefix]. */
     data class Telemetry(val pubKeyPrefix: ByteArray, val readings: List<Lpp.Reading>) : Incoming {
@@ -134,6 +135,7 @@ object FrameDecoder {
                     val prefix = r.bytes(minOf(6, r.remaining))
                     Incoming.Telemetry(prefix, Lpp.decode(r.rest()))
                 }
+                Push.CONTROL_DATA -> parseControlData(r) ?: Incoming.Raw(code, frame.copyOfRange(1, frame.size))
 
                 else -> Incoming.Raw(code, frame.copyOfRange(1, frame.size))
             }
@@ -289,6 +291,26 @@ object FrameDecoder {
             sentFlood = sentFlood, sentDirect = sentDirect, recvFlood = recvFlood, recvDirect = recvDirect,
             errEvents = errEvents, lastSnrQ = snrQ, directDups = directDups, floodDups = floodDups,
             airtimeRxSecs = airRx, recvErrors = recvErrors,
+        )
+    }
+
+    // PUSH_CODE_CONTROL_DATA (MyMesh::onControlDataRecv):
+    //   snr(i8 x4) rssi(i8) pathLen(1) ctlPayload...
+    //   A NODE_DISCOVER_RESP ctl payload is: type(0x90|nodeType) inSnr(i8 x4) tag(u32) pubKey(8|32).
+    // Returns null for control data we don't decode (caller falls back to Raw).
+    private fun parseControlData(r: FrameReader): Incoming? {
+        val snr = r.i8()
+        val rssi = r.i8()
+        r.u8() // path_len
+        if (r.remaining < 1) return null
+        val ptype = r.u8()
+        if (ptype and 0xF0 != CtlType.NODE_DISCOVER_RESP) return null
+        val nodeType = ptype and 0x0F
+        val inSnr = r.i8()
+        val tag = r.u32()
+        val key = r.bytes(r.remaining) // 8-byte prefix or full 32
+        return Incoming.NodeDiscovered(
+            DiscoveredNode(pubKey = key, type = nodeType, tag = tag, snrQ = snr, inSnrQ = inSnr, rssi = rssi)
         )
     }
 

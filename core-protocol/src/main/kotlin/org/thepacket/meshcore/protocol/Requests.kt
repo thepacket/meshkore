@@ -249,6 +249,23 @@ object Requests {
     fun sendTracePath(tag: Long, path: ByteArray, auth: Long = 0, flags: Int = 0): ByteArray =
         FrameWriter().u8(Cmd.SEND_TRACE_PATH).u32(tag).u32(auth).u8(flags).bytes(path).build()
 
+    /**
+     * Blind, zero-hop node-discovery request. Unlike telemetry/status requests it carries NO
+     * recipient key — the firmware broadcasts it zero-hop and every direct neighbour whose type
+     * matches replies with a NODE_DISCOVER_RESP (arrives as PUSH_CODE_CONTROL_DATA). Verified
+     * against MyMesh.cpp `CMD_SEND_CONTROL_DATA` + simple_repeater `onControlDataRecv`.
+     *
+     * Layout: [cmd, NODE_DISCOVER_REQ|prefixOnly, typeFilter, tag(u32)[, since(u32)]].
+     * `typeFilter` is a bitmask of (1 shl ContactType.*); `tag` correlates the replies.
+     */
+    fun nodeDiscoverReq(typeFilter: Int, tag: Long, prefixOnly: Boolean = true): ByteArray =
+        FrameWriter()
+            .u8(Cmd.SEND_CONTROL_DATA)
+            .u8(CtlType.NODE_DISCOVER_REQ or (if (prefixOnly) 1 else 0))
+            .u8(typeFilter)
+            .u32(tag)
+            .build()
+
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
     /** Erase all device settings and reboot. Payload is the literal "reset" guard. */

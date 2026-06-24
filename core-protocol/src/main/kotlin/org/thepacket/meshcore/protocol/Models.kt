@@ -134,6 +134,25 @@ data class RepeaterStats(
     val recvErrors: Long,
 )
 
+/**
+ * A node that answered a blind NODE_DISCOVER_REQ (PUSH_CODE_CONTROL_DATA / NODE_DISCOVER_RESP).
+ * [pubKey] is an 8-byte prefix (prefix-only request) or the full 32 bytes. SNRs are quarter-dB.
+ */
+data class DiscoveredNode(
+    val pubKey: ByteArray,
+    val type: Int,        // ContactType.*
+    val tag: Long,
+    val snrQ: Int,        // our SNR of their reply
+    val inSnrQ: Int,      // their SNR of our request
+    val rssi: Int,
+) {
+    val keyPrefixHex: String get() = pubKey.copyOf(minOf(6, pubKey.size)).toHex()
+    val snrDb: Double get() = snrQ / 4.0
+
+    override fun equals(other: Any?) = other is DiscoveredNode && pubKey.contentEquals(other.pubKey)
+    override fun hashCode() = pubKey.contentHashCode()
+}
+
 /** One hop of a trace-route result (PUSH_CODE_TRACE_DATA). */
 data class TraceHop(val hashByte: Int, val snrQ: Int) {
     /** SNR is transmitted as quarter-dB (snr * 4). */
