@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +31,7 @@ import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
+import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.toHex
 import java.text.SimpleDateFormat
@@ -56,6 +58,8 @@ fun NodeDetailSheet(
     onResetPath: (() -> Unit)? = null,
     onExport: (() -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
+    onRequestTelemetry: (() -> Unit)? = null,
+    telemetry: List<Lpp.Reading>? = null,
 ) {
     val coords: Pair<Double, Double>? = when {
         isSelf && self != null && (self.advLat != 0 || self.advLon != 0) -> self.advLat / 1e6 to self.advLon / 1e6
@@ -110,6 +114,11 @@ fun NodeDetailSheet(
                     Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
                 }
 
+                if (onRequestTelemetry != null) {
+                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                    TelemetrySection(telemetry, onRequestTelemetry)
+                }
+
                 if (onShare != null || onResetPath != null || onExport != null || onRemove != null) {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     ContactActions(onShare, onResetPath, onExport, onRemove)
@@ -118,6 +127,37 @@ fun NodeDetailSheet(
         }
     }
 }
+
+@Composable
+private fun TelemetrySection(telemetry: List<Lpp.Reading>?, onRequest: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Telemetry", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        OutlinedButton(onClick = onRequest) { Text(if (telemetry == null) "Request" else "Refresh") }
+    }
+    when {
+        telemetry == null -> kvHint("Tap Request to ask this node for telemetry.")
+        telemetry.isEmpty() -> kvHint("No telemetry returned.")
+        else -> {
+            val byChannel = telemetry.groupBy { it.channel }.toSortedMap()
+            byChannel.forEach { (ch, readings) ->
+                if (byChannel.size > 1) {
+                    Text("Channel $ch", color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp))
+                }
+                readings.forEach { kvRow(telemetryLabel(it), telemetryValue(it)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun kvHint(text: String) =
+    Text(text, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        style = MaterialTheme.typography.bodySmall)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

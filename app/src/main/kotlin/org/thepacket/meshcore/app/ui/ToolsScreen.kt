@@ -204,6 +204,7 @@ private fun DiscoverTool(
     val allNeighbours by session.neighbours.collectAsStateWithLifecycle()
     val neighbours = allNeighbours.filter { it.type == typeFilter }
     val heard by session.heard.collectAsStateWithLifecycle()
+    val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<Contact?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -240,6 +241,8 @@ private fun DiscoverTool(
             heard = heard.firstOrNull { it.pubKeyHex.startsWith(c.keyPrefixHex) },
             self = self,
             onDismiss = { selected = null },
+            onRequestTelemetry = { session.requestTelemetry(c) },
+            telemetry = contactTelemetry[c.keyPrefixHex],
         )
     }
 }

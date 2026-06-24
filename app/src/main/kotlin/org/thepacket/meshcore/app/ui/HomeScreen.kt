@@ -101,6 +101,7 @@ private fun ContactsList(
 ) {
     var detail by remember { mutableStateOf<Contact?>(null) }
     var showImport by remember { mutableStateOf(false) }
+    val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
 
     // Sorted alphabetically by display name (case-insensitive).
     val sorted = remember(contacts) {
@@ -148,6 +149,8 @@ private fun ContactsList(
             onResetPath = { session.resetPath(c) },
             onExport = { session.exportContact(c); detail = null },
             onRemove = { session.removeContact(c); detail = null },
+            onRequestTelemetry = { session.requestTelemetry(c) },
+            telemetry = contactTelemetry[c.keyPrefixHex],
         )
     }
 

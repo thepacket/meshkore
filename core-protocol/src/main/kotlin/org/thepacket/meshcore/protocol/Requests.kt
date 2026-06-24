@@ -167,6 +167,23 @@ object Requests {
     /** Request this node's own telemetry (a 4-byte frame triggers the self reply). */
     fun selfTelemetry(): ByteArray = FrameWriter().u8(Cmd.SEND_TELEMETRY_REQ).u8(0).u8(0).u8(0).build()
 
+    /**
+     * Request a remote contact's telemetry. Layout: [cmd, reserved(3), pubKey(32)].
+     * Verified against MyMesh.cpp CMD_SEND_TELEMETRY_REQ: the remote branch (len >=
+     * 4 + PUB_KEY_SIZE) looks the contact up by FULL 32-byte public key at offset 4,
+     * then sends a REQ_TYPE_GET_TELEMETRY_DATA. The device first replies RESP_CODE_SENT
+     * (tag/timeout); the readings arrive later as a TELEMETRY_RESPONSE push carrying the
+     * contact's 6-byte key prefix.
+     */
+    fun requestTelemetry(pubKey: ByteArray): ByteArray {
+        require(pubKey.size >= 32) { "pubKey must be the full 32 bytes" }
+        return FrameWriter()
+            .u8(Cmd.SEND_TELEMETRY_REQ)
+            .bytes(ByteArray(3))
+            .bytes(pubKey.copyOf(32))
+            .build()
+    }
+
     /** Auto-add config: [AutoAdd] flag bitmask + max hops (0 = unlimited). */
     fun setAutoAddConfig(flags: Int, maxHops: Int): ByteArray =
         FrameWriter().u8(Cmd.SET_AUTOADD_CONFIG).u8(flags).u8(maxHops).build()

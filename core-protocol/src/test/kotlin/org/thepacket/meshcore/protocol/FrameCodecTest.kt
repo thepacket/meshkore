@@ -312,6 +312,16 @@ class FrameCodecTest {
         assertEquals(70000L, s.recvErrors)
     }
 
+    @Test fun requestTelemetryShape() {
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val frame = Requests.requestTelemetry(key)
+        // [cmd, reserved(3), pubKey(32)] = 36 bytes; firmware reads the key at offset 4.
+        assertEquals(36, frame.size)
+        assertEquals(Cmd.SEND_TELEMETRY_REQ.toByte(), frame[0])
+        assertArrayEquals(byteArrayOf(0, 0, 0), frame.copyOfRange(1, 4))
+        assertArrayEquals(key, frame.copyOfRange(4, 36))
+    }
+
     @Test fun getStatsRequestShape() {
         assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
             Requests.getStats(StatsType.RADIO))

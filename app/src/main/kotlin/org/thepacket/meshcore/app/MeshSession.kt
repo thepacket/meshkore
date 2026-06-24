@@ -117,6 +117,10 @@ class MeshSession(
     private val _telemetry = MutableStateFlow<List<Lpp.Reading>>(emptyList())
     val telemetry: StateFlow<List<Lpp.Reading>> = _telemetry.asStateFlow()
 
+    /** Remote contacts' telemetry, keyed by the contact's 6-byte key-prefix hex. */
+    private val _contactTelemetry = MutableStateFlow<Map<String, List<Lpp.Reading>>>(emptyMap())
+    val contactTelemetry: StateFlow<Map<String, List<Lpp.Reading>>> = _contactTelemetry.asStateFlow()
+
     /** Latest trace-path result (Tools → Trace path). */
     private val _traceResult = MutableStateFlow<TraceResult?>(null)
     val traceResult: StateFlow<TraceResult?> = _traceResult.asStateFlow()
@@ -173,6 +177,14 @@ class MeshSession(
     /** Re-request this node's own telemetry. */
     fun refreshTelemetry() = scope.launch { runCatching { link.send(Requests.selfTelemetry()) } }.let {}
 
+    /**
+     * Request a remote contact's telemetry. The device replies SENT immediately; the
+     * readings arrive later (or not, if unreachable) and land in [contactTelemetry]
+     * keyed by the contact's 6-byte key-prefix hex.
+     */
+    fun requestTelemetry(contact: Contact) =
+        scope.launch { runCatching { link.send(Requests.requestTelemetry(contact.publicKey)) } }.let {}
+
     /** Trace a path through the given ordered hop hashes (each = a node's public-key prefix byte). */
     fun sendTrace(path: ByteArray) {
         if (path.isEmpty()) return
@@ -221,6 +233,7 @@ class MeshSession(
         _deviceInfo.value = null
         _battStorage.value = null
         _telemetry.value = emptyList()
+        _contactTelemetry.value = emptyMap()
         _traceResult.value = null
         pendingSettings.clear()
         lastAdvertSnrQ = null; lastAdvertRssi = null
@@ -532,7 +545,16 @@ class MeshSession(
             is Incoming.AutoAdd -> _autoAdd.value = f.config
             is Incoming.Device -> _deviceInfo.value = f.info
             is Incoming.Battery -> _battStorage.value = f.info
-            is Incoming.Telemetry -> _telemetry.value = f.readings
+            is Incoming.Telemetry -> {
+                // Self telemetry (auto-requested on connect) carries our own prefix; anything
+                // else is a remote contact's reply to requestTelemetry().
+                val selfPrefix = _self.value?.publicKey?.copyOf(6)
+                if (selfPrefix != null && selfPrefix.contentEquals(f.pubKeyPrefix)) {
+                    _telemetry.value = f.readings
+                } else {
+                    _contactTelemetry.update { it + (f.pubKeyPrefix.toHex() to f.readings) }
+                }
+            }
             is Incoming.Trace -> _traceResult.value = f.result
             is Incoming.ExportedContact -> _exportedContact.tryEmit(f.card.toHex())
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)

@@ -81,7 +81,7 @@ private fun TelemetryCard(telemetry: List<Lpp.Reading>, onRefresh: () -> Unit) {
     }
 }
 
-private fun telemetryLabel(r: Lpp.Reading): String = when (r.type) {
+internal fun telemetryLabel(r: Lpp.Reading): String = when (r.type) {
     Lpp.VOLTAGE -> if (r.channel == 1) "Battery" else "Voltage"
     Lpp.TEMPERATURE -> "Temperature"
     Lpp.RELATIVE_HUMIDITY -> "Relative humidity"
@@ -95,7 +95,7 @@ private fun telemetryLabel(r: Lpp.Reading): String = when (r.type) {
     else -> "Type ${r.type}"
 }
 
-private fun telemetryValue(r: Lpp.Reading): String {
+internal fun telemetryValue(r: Lpp.Reading): String {
     fun n(d: Double) = if (d == d.toLong().toDouble()) d.toLong().toString() else "%.1f".format(d)
     val v = r.values.firstOrNull() ?: return "—"
     return when (r.type) {
