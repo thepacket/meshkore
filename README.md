@@ -14,15 +14,17 @@ keep their own, independent visual languages.
 
 ## Features
 
-Connect to a companion device over BLE. The app has seven tabs —
-**Chats · Heard · Packets · Stats · Map · Tools · Settings**:
+Connect to a companion device over BLE — including **PIN/passkey pairing** for
+MITM-protected nodes (you're prompted for the device PIN on the first connection).
+The app has seven tabs — **Chats · Heard · Packets · Stats · Map · Tools · Settings**:
 
 - **Messaging (Chats)** — split into **Contacts** and **Channels** sub-tabs. Group
   **channels** and **direct messages** with speech-bubble threads, per-name colours,
   inbound SNR, and outbound **delivery status** (sending → sent → delivered ✓, via the
   ACK path). Conversations are **persisted** locally across reconnects/restarts.
   - **Contact management** — long-press a contact for **Share**, **Reset path**,
-    **Export** and **Remove**; **import** a contact from an exported card.
+    **Export**, **Remove**, and **Request telemetry** (the battery/sensor data the
+    node chooses to share); **import** a contact from an exported card.
   - **Channel management** — **create**, **edit** (name + 128-bit key, with a randomize
     button) and **delete** channels, with guards that prevent silently overwriting an
     existing slot (e.g. the Public channel).
@@ -41,8 +43,10 @@ Connect to a companion device over BLE. The app has seven tabs —
   - **Trace path** — build a route by tapping repeaters on the live map (a node may
     repeat); long-press a node for its details. Sends the trace and shows the
     **per-hop receive SNR** on return.
-  - **Discover** — find nearby (one-hop) **companions, repeaters, room servers and
-    sensors** via a zero-hop advert; discovered nodes are added to contacts.
+  - **Discover nodes** — send a one-hop discovery request and list the nearby nodes
+    that answer (**companions, repeaters, room servers and sensors**), each tagged with
+    its type and signal, sorted by signal strength. New nodes are added to contacts.
+    Discover and Clear are user-driven, with an optional 60-second auto-refresh.
 - **Settings** — full editable device config: node name, **region presets**, frequency,
   bandwidth, SF, coding rate, **TX power**, advertised **position (set from a map)**,
   network/telemetry options, tuning, auto-add, experimental **path-hash size**; plus
@@ -57,15 +61,16 @@ location, which the OS requires for BLE scanning).
 | Area | State |
 |---|---|
 | Connect + device config (full editable settings) | ✅ done, hardware-validated |
+| BLE PIN / passkey pairing (MITM companions) | ✅ done, hardware-validated |
 | Messaging (DMs + channels + delivery status + persistence) | ✅ done, hardware-validated |
-| Contact management (share / reset-path / remove / export-import) | ✅ done; export/import round-trip not yet hardware-verified |
+| Contact management (share / reset-path / remove / export-import) | ✅ done, hardware-validated |
 | Channel management (create / edit / delete) | ✅ done, hardware-validated |
 | Instrumentation (packet monitor / noise / stats / telemetry) | ✅ done, hardware-validated |
+| Remote telemetry (request a contact's telemetry) | ✅ done, hardware-validated |
 | Last-heard | ✅ done, hardware-validated |
 | Map (node positions) | ✅ done, hardware-validated |
-| Tools — trace path (on map) + discover | ✅ done, hardware-validated |
+| Tools — trace path (on map) + node discovery | ✅ done, hardware-validated |
 | Repeater management (remote login/stats/triggers) | ⏸️ deferred until a repeater is available to test |
-| Remote telemetry (request a contact's telemetry) | 🔜 planned next |
 
 ## Module layout
 
