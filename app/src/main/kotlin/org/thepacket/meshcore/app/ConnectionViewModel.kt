@@ -3,6 +3,7 @@ package org.thepacket.meshcore.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -78,6 +79,9 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                         st.copy(devices = merged)
                     }
                 }
+            } catch (e: CancellationException) {
+                // Expected when stopScan()/connect() cancels the scan — not an error.
+                throw e
             } catch (e: Exception) {
                 _ui.update { it.copy(error = e.message, scanning = false) }
             }
@@ -96,6 +100,8 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 link.connect(d.device)
                 session.start() // APP_START handshake -> self info -> contacts sync
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _ui.update { it.copy(error = e.message) }
             }
