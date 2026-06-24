@@ -16,7 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Route
@@ -25,9 +27,12 @@ import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +41,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
@@ -57,6 +65,16 @@ import org.thepacket.meshcore.protocol.SelfInfo
 fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Modifier) {
     val contacts by session.contacts.collectAsStateWithLifecycle()
     var open by remember { mutableStateOf<String?>(null) }
+    val ctx = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    fun notify(msg: String) = scope.launch { snackbar.showSnackbar(msg) }
+
+    // "Advert — To Clipboard" exports this node's own card; the hex arrives asynchronously.
+    // Android shows its own clipboard confirmation, so no extra message is needed here.
+    LaunchedEffect(session) {
+        session.exportedContact.collect { card -> copyToClipboard(ctx, "MeshCore advert", card) }
+    }
 
     Box(modifier.fillMaxSize()) {
         when (open) {
@@ -70,9 +88,34 @@ fun ToolsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = Mod
                     "Trace a path through chosen repeaters; see each hop's SNR.") { open = "trace" }
                 ToolRow(Icons.Default.Sensors, "Discover nodes",
                     "Find nearby (one-hop) nodes — repeaters, room servers, sensors and companions.") { open = "discover" }
+                ToolRow(Icons.Default.Campaign, "Advert — Zero Hop",
+                    "Announce this node to direct (one-hop) neighbours.") {
+                    session.sendSelfAdvert(flood = false); notify("Zero-hop advert sent")
+                }
+                ToolRow(Icons.Default.Campaign, "Advert — Flood Routed",
+                    "Announce this node across the whole mesh (flood-routed).") {
+                    session.sendSelfAdvert(flood = true); notify("Flood advert sent")
+                }
+                ToolRow(Icons.Default.ContentCopy, "Advert — To Clipboard",
+                    "Copy this node's advert card to the clipboard for sharing.") {
+                    session.exportSelfAdvert()
+                }
             }
         }
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp)) { data ->
+            Snackbar(
+                snackbarData = data,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                shape = MaterialTheme.shapes.medium,
+            )
+        }
     }
+}
+
+private fun copyToClipboard(ctx: android.content.Context, label: String, text: String) {
+    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    cm.setPrimaryClip(android.content.ClipData.newPlainText(label, text))
 }
 
 @Composable

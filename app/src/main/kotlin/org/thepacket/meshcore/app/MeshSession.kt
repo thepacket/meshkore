@@ -464,6 +464,16 @@ class MeshSession(
         scope.launch { runCatching { link.send(Requests.exportContact(c.publicKey)) } }
     }
 
+    /** Broadcast our own advert — zero-hop (direct neighbours) or flood-routed (whole mesh). */
+    fun sendSelfAdvert(flood: Boolean) {
+        scope.launch { runCatching { link.send(Requests.sendSelfAdvert(flood)) } }
+    }
+
+    /** Export THIS node's own advert "card"; the hex arrives on [exportedContact]. */
+    fun exportSelfAdvert() {
+        scope.launch { runCatching { link.send(Requests.exportContact(null)) } }
+    }
+
     /**
      * Import a contact from a pasted "card" (hex). The card is a self-advert packet, so we can
      * decode it locally and add the contact optimistically — no full contacts resync needed
