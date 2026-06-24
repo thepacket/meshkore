@@ -50,8 +50,11 @@ fun ConnectScreen(
                     Icon(Icons.Default.Bluetooth, contentDescription = null)
                     Text(if (state.scanning) "  Stop scan" else "  Scan for devices")
                 }
-                if (state.linkState == LinkState.Connecting) CircularProgressIndicator(Modifier.padding(4.dp))
+                if (state.linkState == LinkState.Connecting || state.linkState == LinkState.Bonding)
+                    CircularProgressIndicator(Modifier.padding(4.dp))
             }
+            if (state.linkState == LinkState.Bonding)
+                Text("Pairing — enter the device PIN (default 123456) when prompted.")
             state.error?.let { Text("⚠ $it", color = MaterialTheme.colorScheme.error) }
             DeviceList(state.devices, onConnect)
         }

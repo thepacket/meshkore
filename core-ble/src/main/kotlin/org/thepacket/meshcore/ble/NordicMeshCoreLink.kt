@@ -3,7 +3,11 @@ package org.thepacket.meshcore.ble
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -30,7 +34,8 @@ import kotlin.coroutines.resumeWithException
  */
 class NordicMeshCoreLink(context: Context) : MeshCoreLink {
 
-    private val manager = Manager(context.applicationContext)
+    private val appContext = context.applicationContext
+    private val manager = Manager(appContext)
 
     private val _state = MutableStateFlow(LinkState.Disconnected)
     override val state: StateFlow<LinkState> = _state.asStateFlow()
@@ -39,7 +44,59 @@ class NordicMeshCoreLink(context: Context) : MeshCoreLink {
     override val incoming: SharedFlow<Incoming> = _incoming.asSharedFlow()
 
     /** Connect to a device discovered by scanning (see [companionScanFilter]). */
-    suspend fun connect(device: BluetoothDevice): Unit = suspendCancellableCoroutine { cont ->
+    suspend fun connect(device: BluetoothDevice) {
+        // MeshCore companions use MITM passkey pairing. Bonding must complete BEFORE
+        // the GATT link is opened: bonding mid-connection makes the nRF52 drop the
+        // link to re-encrypt it, which makes the GATT connect time out (status=-5).
+        // So we bond at the HCI level first (this shows the system PIN dialog without
+        // a GATT connection), then connect to the now-bonded device.
+        if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            _state.value = LinkState.Bonding
+            bond(device)
+        }
+        gattConnect(device)
+    }
+
+    /** Create a bond (system PIN prompt) and suspend until it succeeds or fails. */
+    private suspend fun bond(device: BluetoothDevice): Unit = suspendCancellableCoroutine { cont ->
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+                val dev = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                if (dev?.address != device.address) return
+                when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)) {
+                    BluetoothDevice.BOND_BONDED -> {
+                        runCatching { appContext.unregisterReceiver(this) }
+                        if (cont.isActive) cont.resume(Unit)
+                    }
+                    BluetoothDevice.BOND_NONE -> {
+                        runCatching { appContext.unregisterReceiver(this) }
+                        _state.value = LinkState.Failed
+                        if (cont.isActive) cont.resumeWithException(BleException("bonding failed / cancelled"))
+                    }
+                    // BOND_BONDING: pairing in progress (PIN dialog), keep waiting.
+                }
+            }
+        }
+        val filter = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+        // ACTION_BOND_STATE_CHANGED is broadcast by the system (another process), so the
+        // receiver must be EXPORTED to receive it on API 33+; NOT_EXPORTED would silently
+        // drop it. It is a protected broadcast (only the system can send it), so this is safe.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            appContext.registerReceiver(receiver, filter)
+        }
+        cont.invokeOnCancellation { runCatching { appContext.unregisterReceiver(receiver) } }
+        if (!device.createBond()) {
+            runCatching { appContext.unregisterReceiver(receiver) }
+            _state.value = LinkState.Failed
+            if (cont.isActive) cont.resumeWithException(BleException("createBond() rejected"))
+        }
+    }
+
+    private suspend fun gattConnect(device: BluetoothDevice): Unit = suspendCancellableCoroutine { cont ->
         _state.value = LinkState.Connecting
         manager.connect(device)
             .retry(3, 200)
@@ -99,6 +156,8 @@ class NordicMeshCoreLink(context: Context) : MeshCoreLink {
             }
 
             override fun initialize() {
+                // Bonding is handled before the GATT connect (see connect()), so the
+                // link is already encrypted by the time we reach the NUS characteristics.
                 requestMtu(247).enqueue() // larger MTU = fewer fragments for big frames
                 setNotificationCallback(tx).with { _, data: Data ->
                     val bytes = data.value ?: return@with

@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.StateFlow
 import org.thepacket.meshcore.protocol.Incoming
 
 /** Connection lifecycle for a companion link. */
-enum class LinkState { Disconnected, Connecting, Connected, Disconnecting, Failed }
+enum class LinkState { Disconnected, Connecting, Bonding, Connected, Disconnecting, Failed }
 
 /**
  * Transport-agnostic view of a MeshCore companion connection. The app and any
