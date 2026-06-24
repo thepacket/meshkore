@@ -210,8 +210,16 @@ private fun DiscoverTool(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ToolHeader(title, onBack)
-        Text("Reachable directly, with no repeater in between (one hop).",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        val hint = if (typeFilter == ContactType.CHAT) {
+            // Companions don't beacon periodically (unlike repeaters/sensors/room servers),
+            // so they only appear if they advertise while you're listening.
+            "Reachable directly, with no repeater in between (one hop). Companions don't " +
+                "advertise automatically — each one must Announce on its own device to appear here."
+        } else {
+            "Reachable directly, with no repeater in between (one hop)."
+        }
+        Text(hint, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         OutlinedButton(onClick = { session.announceZeroHop() }, modifier = Modifier.fillMaxWidth()) {
             Text("Announce (zero-hop advert)")
         }
