@@ -13,10 +13,15 @@ object Requests {
 
     /**
      * Handshake. Must be the first frame after connecting. The firmware replies
-     * with RESP_CODE_SELF_INFO. Layout: [cmd, appVer, reserved(6), appName...].
-     * `appVer` selects the protocol generation (>=3 enables the *_V3 message
-     * receive frames). TODO: confirm reserved-field width against the firmware
-     * handshake handler before relying on appName parsing on the device side.
+     * with RESP_CODE_SELF_INFO. Layout: [cmd, reserved(7), appName...].
+     *
+     * Verified against MyMesh.cpp `CMD_APP_START` handler: it requires `len >= 8`
+     * and reads `app_name` at offset 8, treating bytes 1..7 as reserved. Our
+     * `appVer(1) + reserved(6)` exactly fills those 7 bytes, so the name lands at
+     * offset 8. Note: APP_START does NOT read the version byte — the protocol
+     * generation (>=3 enables the *_V3 receive frames) is selected by
+     * [deviceQuery]'s version byte (firmware `app_target_ver`), not here. The
+     * `appVer` argument is kept only to occupy reserved byte 1.
      */
     fun appStart(appVer: Int = 3, appName: String = "meshcore-android"): ByteArray =
         FrameWriter()
