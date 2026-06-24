@@ -79,6 +79,7 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
     val ctx = LocalContext.current
     val tuning by session.tuning.collectAsStateWithLifecycle()
     val autoAdd by session.autoAdd.collectAsStateWithLifecycle()
+    val allowedRepeat by session.allowedRepeatFreqs.collectAsStateWithLifecycle()
     val deviceInfo by session.deviceInfo.collectAsStateWithLifecycle()
     val battStorage by session.battStorage.collectAsStateWithLifecycle()
     val contacts by session.contacts.collectAsStateWithLifecycle()
@@ -156,10 +157,34 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             EnumDropdown("Spreading factor", sfList, sfIdx) { sfIdx = it; presetIdx = 0 }
             EnumDropdown("Coding rate", crList, crIdx) { crIdx = it; presetIdx = 0 }
             SwitchRow("Client-repeat mode", repeat) { repeat = it }
+            // The firmware only permits client-repeat on specific frequencies (queried from the
+            // device); enabling it elsewhere makes SET_RADIO_PARAMS fail. Warn before that happens.
+            val freqKhz = freq.toDoubleOrNull()?.let { (it * 1000).toLong() }
+            val repeatAllowedHere = freqKhz != null && allowedRepeat.any { freqKhz in it }
+            if (repeat && allowedRepeat.isNotEmpty() && !repeatAllowedHere) {
+                Text(
+                    "⚠ Client-repeat isn't allowed at $freq MHz. Allowed: " +
+                        "${formatFreqRanges(allowedRepeat)}. Switch to an allowed frequency, or the save is rejected.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else {
+                Text(
+                    "Relays received packets — this node also acts as a repeater, on the operating " +
+                        "frequency. Only permitted on certain frequencies" +
+                        (if (allowedRepeat.isNotEmpty()) " (${formatFreqRanges(allowedRepeat)})." else "."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            }
             SaveRow {
                 val fq = freq.toDoubleOrNull()
-                if (fq != null) session.applyRadio(fq, bwList[bwIdx], sfIdx + 5, crIdx + 5, repeat)
-                else toast(ctx, "Radio: invalid frequency")
+                when {
+                    fq == null -> toast(ctx, "Radio: invalid frequency")
+                    repeat && allowedRepeat.isNotEmpty() && !repeatAllowedHere ->
+                        toast(ctx, "Client-repeat needs an allowed frequency (${formatFreqRanges(allowedRepeat)})")
+                    else -> session.applyRadio(fq, bwList[bwIdx], sfIdx + 5, crIdx + 5, repeat)
+                }
             }
         }
 
@@ -411,6 +436,12 @@ private fun Field(label: String, value: String, onValue: (String) -> Unit) {
         value = value, onValueChange = onValue, label = { Text(label) },
         singleLine = true, modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/** Render allowed client-repeat frequencies (kHz ranges) as a compact MHz string, e.g. "918 MHz". */
+private fun formatFreqRanges(ranges: List<LongRange>): String = ranges.joinToString(", ") { r ->
+    if (r.first == r.last) "${trimNum(r.first / 1000.0)} MHz"
+    else "${trimNum(r.first / 1000.0)}–${trimNum(r.last / 1000.0)} MHz"
 }
 
 @Composable

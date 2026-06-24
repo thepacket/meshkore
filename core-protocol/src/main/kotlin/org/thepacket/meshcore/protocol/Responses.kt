@@ -62,6 +62,8 @@ sealed interface Incoming {
     data class Trace(val result: TraceResult) : Incoming
     data class RxPacket(val log: RxLog) : Incoming
     data class NodeDiscovered(val node: DiscoveredNode) : Incoming
+    /** RESP_CODE_ALLOWED_REPEAT_FREQ — frequency ranges (kHz) where client-repeat is permitted. */
+    data class AllowedRepeatFreqs(val rangesKhz: List<LongRange>) : Incoming
 
     /** PUSH_CODE_TELEMETRY_RESPONSE — decoded LPP readings from [pubKeyPrefix]. */
     data class Telemetry(val pubKeyPrefix: ByteArray, val readings: List<Lpp.Reading>) : Incoming {
@@ -113,6 +115,14 @@ object FrameDecoder {
                 Resp.AUTOADD_CONFIG -> Incoming.AutoAdd(
                     AutoAddConfig(if (r.remaining > 0) r.u8() else 0, if (r.remaining > 0) r.u8() else 0)
                 )
+                Resp.ALLOWED_REPEAT_FREQ -> {
+                    val ranges = ArrayList<LongRange>()
+                    while (r.remaining >= 8) { // (lower, upper) kHz pairs
+                        val lo = r.u32(); val hi = r.u32()
+                        ranges.add(lo..hi)
+                    }
+                    Incoming.AllowedRepeatFreqs(ranges)
+                }
                 Resp.CONTACT_MSG_RECV, Resp.CONTACT_MSG_RECV_V3 ->
                     Incoming.Message(parseMessage(r, channel = false, v3 = code == Resp.CONTACT_MSG_RECV_V3))
                 Resp.CHANNEL_MSG_RECV, Resp.CHANNEL_MSG_RECV_V3 ->

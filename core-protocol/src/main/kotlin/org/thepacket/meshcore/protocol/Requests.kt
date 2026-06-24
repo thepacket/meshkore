@@ -190,6 +190,9 @@ object Requests {
 
     fun getAutoAddConfig(): ByteArray = FrameWriter().u8(Cmd.GET_AUTOADD_CONFIG).build()
 
+    /** Query the frequencies (kHz ranges) on which this firmware permits client-repeat. */
+    fun getAllowedRepeatFreq(): ByteArray = FrameWriter().u8(Cmd.GET_ALLOWED_REPEAT_FREQ).build()
+
     /** Path-hash mode (0–2). Frame: [cmd, reserved(0), mode]. */
     fun setPathHashMode(mode: Int): ByteArray =
         FrameWriter().u8(Cmd.SET_PATH_HASH_MODE).u8(0).u8(mode).build()

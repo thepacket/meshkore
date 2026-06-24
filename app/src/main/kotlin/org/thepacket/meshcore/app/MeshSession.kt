@@ -109,6 +109,10 @@ class MeshSession(
     private val _autoAdd = MutableStateFlow<AutoAddConfig?>(null)
     val autoAdd: StateFlow<AutoAddConfig?> = _autoAdd.asStateFlow()
 
+    /** Frequencies (kHz ranges) on which the firmware permits client-repeat (Settings → Radio). */
+    private val _allowedRepeatFreqs = MutableStateFlow<List<LongRange>>(emptyList())
+    val allowedRepeatFreqs: StateFlow<List<LongRange>> = _allowedRepeatFreqs.asStateFlow()
+
     private val _deviceInfo = MutableStateFlow<DeviceInfo?>(null)
     val deviceInfo: StateFlow<DeviceInfo?> = _deviceInfo.asStateFlow()
 
@@ -178,6 +182,7 @@ class MeshSession(
         // Pre-fetch config that SELF_INFO doesn't carry, so the settings form pre-fills.
         scope.launch { link.send(Requests.getTuningParams()) }
         scope.launch { link.send(Requests.getAutoAddConfig()) }
+        scope.launch { link.send(Requests.getAllowedRepeatFreq()) }
         scope.launch { link.send(Requests.deviceQuery()) }
         scope.launch { link.send(Requests.getBattAndStorage()) }
         scope.launch { link.send(Requests.selfTelemetry()) }
@@ -263,6 +268,7 @@ class MeshSession(
         discoverTag = 0L
         _tuning.value = null
         _autoAdd.value = null
+        _allowedRepeatFreqs.value = emptyList()
         _deviceInfo.value = null
         _battStorage.value = null
         _telemetry.value = emptyList()
@@ -594,6 +600,7 @@ class MeshSession(
             }
             is Incoming.Tuning -> _tuning.value = f.params
             is Incoming.AutoAdd -> _autoAdd.value = f.config
+            is Incoming.AllowedRepeatFreqs -> _allowedRepeatFreqs.value = f.rangesKhz
             is Incoming.Device -> _deviceInfo.value = f.info
             is Incoming.Battery -> _battStorage.value = f.info
             is Incoming.Telemetry -> {
