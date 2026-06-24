@@ -253,14 +253,22 @@ object FrameDecoder {
         }
     }
 
-    // PUSH_CODE_STATUS_RESPONSE: 56-byte little-endian RepeaterStats after the code byte.
-    // TODO: byte-for-byte verify this layout (field widths + ordering) against the
-    // firmware RepeaterStats struct before trusting the numbers on-device.
+    // PUSH_CODE_STATUS_RESPONSE. Verified against firmware:
+    //   companion (MyMesh.cpp onContactResponse): [code] reserved(1) pubKeyPrefix(6) <stats>
+    //   the <stats> blob is a raw little-endian memcpy of the repeater's RepeaterStats struct
+    //   (simple_repeater/MyMesh.h), 56 bytes, all fields naturally aligned (no padding):
+    //     batt_milli_volts u16, curr_tx_queue_len u16, noise_floor i16, last_rssi i16,
+    //     n_packets_recv u32, n_packets_sent u32, total_air_time_secs u32, total_up_time_secs u32,
+    //     n_sent_flood u32, n_sent_direct u32, n_recv_flood u32, n_recv_direct u32,
+    //     err_events u16, last_snr i16 (x4), n_direct_dups u16, n_flood_dups u16,
+    //     total_rx_air_time_secs u32, n_recv_errors u32
     private fun parseRepeaterStats(r: FrameReader): RepeaterStats {
+        r.u8()        // reserved
+        r.bytes(6)    // pubKeyPrefix (which repeater answered)
         val batteryMv = r.u16()
         val txQueue = r.u16()
-        val noise = r.i8()
-        val rssi = r.i8()
+        val noise = r.i16()
+        val rssi = r.i16()
         val nRecv = r.u32()
         val nSent = r.u32()
         val airTx = r.u32()
@@ -270,16 +278,17 @@ object FrameDecoder {
         val recvFlood = r.u32()
         val recvDirect = r.u32()
         val errEvents = r.u16()
-        val snrQ = r.i8()
-        // one reserved/pad byte keeps the 16-bit and 32-bit fields word-aligned
-        if (r.remaining > 0) r.bytes(1)
+        val snrQ = r.i16()
+        val directDups = r.u16()
+        val floodDups = r.u16()
         val airRx = r.u32()
-        val recvErrors = r.u16()
+        val recvErrors = r.u32()
         return RepeaterStats(
             batteryMilliVolts = batteryMv, txQueueLen = txQueue, noiseFloor = noise, lastRssi = rssi,
             nPacketsRecv = nRecv, nPacketsSent = nSent, airtimeSecs = airTx, uptimeSecs = uptime,
             sentFlood = sentFlood, sentDirect = sentDirect, recvFlood = recvFlood, recvDirect = recvDirect,
-            errEvents = errEvents, lastSnrQ = snrQ, airtimeRxSecs = airRx, recvErrors = recvErrors,
+            errEvents = errEvents, lastSnrQ = snrQ, directDups = directDups, floodDups = floodDups,
+            airtimeRxSecs = airRx, recvErrors = recvErrors,
         )
     }
 

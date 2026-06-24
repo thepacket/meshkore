@@ -128,8 +128,10 @@ data class RepeaterStats(
     val recvDirect: Long,
     val errEvents: Int,
     val lastSnrQ: Int,
+    val directDups: Int,
+    val floodDups: Int,
     val airtimeRxSecs: Long,
-    val recvErrors: Int,
+    val recvErrors: Long,
 )
 
 /** One hop of a trace-route result (PUSH_CODE_TRACE_DATA). */

@@ -275,6 +275,43 @@ class FrameCodecTest {
         assertEquals(2L, s.recvErrors)
     }
 
+    @Test fun decodeRepeaterStatusResponse() {
+        // [code] reserved(1) pubKeyPrefix(6) then the raw 56-byte RepeaterStats struct.
+        val frame = FrameWriter()
+            .u8(Push.STATUS_RESPONSE)
+            .u8(0)                                   // reserved
+            .bytes(byteArrayOf(1, 2, 3, 4, 5, 6))    // pubKeyPrefix
+            .u16(3700)                               // batt_milli_volts
+            .u16(5)                                  // curr_tx_queue_len
+            .u16(0xFF88)                             // noise_floor i16 = -120
+            .u16(0xFF8D)                             // last_rssi i16 = -115
+            .u32(1000).u32(900)                      // n_packets_recv / sent
+            .u32(3600).u32(86400)                    // total_air_time / up_time
+            .u32(11).u32(22).u32(33).u32(44)         // sent flood/direct, recv flood/direct
+            .u16(7)                                  // err_events
+            .u16(48)                                 // last_snr i16, *4 = 12 dB
+            .u16(3).u16(4)                           // n_direct_dups / n_flood_dups
+            .u32(7200)                               // total_rx_air_time_secs
+            .u32(70000)                              // n_recv_errors (> u16 to prove width)
+            .build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.Status)
+        val s = (d as Incoming.Status).stats
+        assertEquals(3700, s.batteryMilliVolts)
+        assertEquals(5, s.txQueueLen)
+        assertEquals(-120, s.noiseFloor)
+        assertEquals(-115, s.lastRssi)
+        assertEquals(1000L, s.nPacketsRecv)
+        assertEquals(86400L, s.uptimeSecs)
+        assertEquals(44L, s.recvDirect)
+        assertEquals(7, s.errEvents)
+        assertEquals(12, s.lastSnrQ / 4)
+        assertEquals(3, s.directDups)
+        assertEquals(4, s.floodDups)
+        assertEquals(7200L, s.airtimeRxSecs)
+        assertEquals(70000L, s.recvErrors)
+    }
+
     @Test fun getStatsRequestShape() {
         assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
             Requests.getStats(StatsType.RADIO))
