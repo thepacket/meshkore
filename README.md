@@ -20,6 +20,9 @@ The app has seven tabs — **Chats · Heard · Packets · Stats · Map · Tools 
   - **Channel management** — **create**, **edit** (name + 128-bit key, with a randomize
     button) and **delete** channels, with guards that prevent silently overwriting an
     existing slot (e.g. the Public channel).
+  - **Repeater / room management** — long-press a repeater or room contact to **log in**,
+    view its **live status** (battery, uptime, packet counts, airtime, signal, dups,
+    errors), and run **admin / CLI commands** with the responses shown in a console.
 - **Heard** — recently-heard stations with a signal-graded dot, SNR/RSSI, age, and
   distance (when both ends advertise GPS); tap for full details.
 - **Packet monitor** — live decoded RX feed (source/destination, payload/route type,
@@ -65,7 +68,7 @@ location, which the OS requires for BLE scanning).
 | Last-heard | ✅ done, hardware-validated |
 | Map (node positions) | ✅ done, hardware-validated |
 | Tools — trace path (on map) + node discovery + advertise | ✅ done, hardware-validated |
-| Repeater management (remote login/stats/triggers) | ⏸️ deferred until a repeater is available to test |
+| Repeater / room management (remote login / status / CLI commands) | ✅ done, hardware-validated |
 
 ## Module layout
 
