@@ -476,6 +476,27 @@ class FrameCodecTest {
         assertEquals("Read-only", acl[1].roleName)
     }
 
+    @Test fun keepAliveShape() {
+        val key = ByteArray(32) { it.toByte() }
+        val frame = Requests.keepAlive(key)
+        assertEquals(Cmd.SEND_BINARY_REQ.toByte(), frame[0])
+        assertArrayEquals(key, frame.copyOfRange(1, 33))
+        assertEquals(BinReqType.KEEP_ALIVE.toByte(), frame[33])
+        assertEquals(34, frame.size)
+    }
+
+    @Test fun ownerInfoRequestAndDecode() {
+        val key = ByteArray(32) { it.toByte() }
+        val frame = Requests.requestOwnerInfo(key)
+        assertEquals(Cmd.SEND_BINARY_REQ.toByte(), frame[0])
+        assertEquals(BinReqType.GET_OWNER_INFO.toByte(), frame[33])
+
+        val o = OwnerInfo.decode("v1.16.0\nRepeater North\nalice@example".toByteArray())
+        assertEquals("v1.16.0", o.firmwareVersion)
+        assertEquals("Repeater North", o.nodeName)
+        assertEquals("alice@example", o.owner)
+    }
+
     @Test fun getStatsRequestShape() {
         assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
             Requests.getStats(StatsType.RADIO))

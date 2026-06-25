@@ -32,6 +32,7 @@ import org.thepacket.meshcore.protocol.Acl
 import org.thepacket.meshcore.protocol.AclEntry
 import org.thepacket.meshcore.protocol.Neighbour
 import org.thepacket.meshcore.protocol.Neighbours
+import org.thepacket.meshcore.protocol.OwnerInfo
 import org.thepacket.meshcore.protocol.RepeaterStats
 import org.thepacket.meshcore.protocol.TxtType
 import org.thepacket.meshcore.protocol.hexToBytes
@@ -58,6 +59,7 @@ data class RepeaterSession(
     val console: List<String> = emptyList(), // CLI command echoes + responses, oldest first
     val neighbours: List<Neighbour>? = null,  // null = not requested yet
     val acl: List<AclEntry>? = null,          // access-control list (admin only); null = not requested
+    val owner: OwnerInfo? = null,             // firmware/owner info; null = not requested
 )
 
 /**
@@ -280,7 +282,7 @@ class MeshSession(
         updateRepeater(contact.keyPrefixHex) { it.copy(login = RepeaterLogin.None) }
     }
 
-    private enum class BinKind { Neighbours, Acl }
+    private enum class BinKind { Neighbours, Acl, Owner }
     /** The in-flight binary request (key-prefix hex + kind); only one at a time. */
     private var pendingBinaryReq: Pair<String, BinKind>? = null
 
@@ -291,10 +293,21 @@ class MeshSession(
         scope.launch { runCatching { link.send(Requests.requestNeighbours(contact.publicKey, nonce)) } }
     }
 
+    /** Keep a logged-in repeater/room session alive (fire-and-forget; no state change). */
+    fun keepAliveRepeater(contact: Contact) {
+        scope.launch { runCatching { link.send(Requests.keepAlive(contact.publicKey)) } }
+    }
+
     /** Ask a repeater/room for its access-control list (admin only); lands in [repeaters] as its acl. */
     fun requestRepeaterAcl(contact: Contact) {
         pendingBinaryReq = contact.keyPrefixHex to BinKind.Acl
         scope.launch { runCatching { link.send(Requests.requestAcl(contact.publicKey)) } }
+    }
+
+    /** Ask a node for its owner info (firmware version, node name, owner); lands in [repeaters]. */
+    fun requestRepeaterOwnerInfo(contact: Contact) {
+        pendingBinaryReq = contact.keyPrefixHex to BinKind.Owner
+        scope.launch { runCatching { link.send(Requests.requestOwnerInfo(contact.publicKey)) } }
     }
 
     /** Send a CLI/admin command to a logged-in repeater/room; replies append to its console. */
@@ -702,6 +715,7 @@ class MeshSession(
                         updateRepeater(hex) { it.copy(neighbours = list) }
                     }
                     BinKind.Acl -> updateRepeater(hex) { it.copy(acl = Acl.decode(f.data)) }
+                    BinKind.Owner -> updateRepeater(hex) { it.copy(owner = OwnerInfo.decode(f.data)) }
                 }
             }
             Incoming.NoMoreMessages -> draining = false

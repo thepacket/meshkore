@@ -344,6 +344,21 @@ object Requests {
             .build()
     }
 
+    /**
+     * Keep a repeater/room session alive (REQ_TYPE_KEEP_ALIVE). Any request resets the node's
+     * session timer; this is the lightweight, no-reply one. Layout: [cmd, pubKey(32), KEEP_ALIVE].
+     */
+    fun keepAlive(pubKey: ByteArray): ByteArray {
+        require(pubKey.size >= 32) { "pubKey must be the full 32 bytes" }
+        return FrameWriter().u8(Cmd.SEND_BINARY_REQ).bytes(pubKey.copyOf(32)).u8(BinReqType.KEEP_ALIVE).build()
+    }
+
+    /** Request a node's owner info (firmware version, node name, owner). Layout: [cmd, pubKey(32), GET_OWNER_INFO]. */
+    fun requestOwnerInfo(pubKey: ByteArray): ByteArray {
+        require(pubKey.size >= 32) { "pubKey must be the full 32 bytes" }
+        return FrameWriter().u8(Cmd.SEND_BINARY_REQ).bytes(pubKey.copyOf(32)).u8(BinReqType.GET_OWNER_INFO).build()
+    }
+
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
     /** Erase all device settings and reboot. Payload is the literal "reset" guard. */

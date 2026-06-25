@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,12 +37,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.RepeaterLogin
 import org.thepacket.meshcore.app.RepeaterSession
 import org.thepacket.meshcore.protocol.AclEntry
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.Neighbour
+import org.thepacket.meshcore.protocol.OwnerInfo
 import org.thepacket.meshcore.protocol.RepeaterStats
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.toHex
@@ -53,6 +56,16 @@ fun RepeaterScreen(session: MeshSession, contact: Contact, onBack: () -> Unit) {
     val contacts by session.contacts.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
     val s = repeaters[contact.keyPrefixHex] ?: RepeaterSession()
+
+    // While logged in and this screen is open, keep the session alive so it doesn't expire when
+    // idle. The effect is cancelled on logout or when the screen closes (no airtime otherwise).
+    LaunchedEffect(contact.keyPrefixHex, s.login == RepeaterLogin.LoggedIn) {
+        if (s.login != RepeaterLogin.LoggedIn) return@LaunchedEffect
+        while (true) {
+            delay(90_000)
+            session.keepAliveRepeater(contact)
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(12.dp),
@@ -92,6 +105,18 @@ private fun NeighboursCard(neighbours: List<Neighbour>, contacts: List<Contact>,
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun OwnerCard(o: OwnerInfo) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Owner / firmware", style = MaterialTheme.typography.titleMedium)
+            if (o.nodeName.isNotBlank()) kv("Node name", o.nodeName)
+            if (o.firmwareVersion.isNotBlank()) kv("Firmware", o.firmwareVersion)
+            kv("Owner", o.owner.ifBlank { "(not set)" })
         }
     }
 }
@@ -180,6 +205,11 @@ private fun ManagementBody(
     }
 
     s.stats?.let { StatusCard(it) }
+
+    OutlinedButton(onClick = { session.requestRepeaterOwnerInfo(contact) }, modifier = Modifier.fillMaxWidth()) {
+        Text(if (s.owner == null) "Owner / firmware" else "Refresh owner / firmware")
+    }
+    s.owner?.let { OwnerCard(it) }
 
     OutlinedButton(onClick = { session.requestRepeaterNeighbours(contact) }, modifier = Modifier.fillMaxWidth()) {
         Text(if (s.neighbours == null) "Get neighbours" else "Refresh neighbours")
