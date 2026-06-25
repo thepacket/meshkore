@@ -1,7 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
+}
+
+// Optional release signing. Drop a (gitignored) keystore.properties next to the repo root —
+// see keystore.properties.example — to sign release builds. Without it, the build still works;
+// the release APK is just left unsigned (debug builds/installs are unaffected either way).
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
 }
 
 android {
@@ -16,10 +26,23 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed when keystore.properties is present; otherwise null (unsigned) — build still succeeds.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
