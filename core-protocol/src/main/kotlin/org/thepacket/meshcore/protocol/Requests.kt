@@ -230,19 +230,33 @@ object Requests {
             .str(text)
             .build()
 
-    /** Remote login to a repeater/room. Layout: [cmd, pubKeyPrefix(6), password...]. */
-    fun sendLogin(pubKeyPrefix: ByteArray, password: String): ByteArray =
+    /**
+     * Remote login to a repeater/room. Layout: [cmd, pubKey(32), password...].
+     * Verified against MyMesh.cpp CMD_SEND_LOGIN: it requires len >= 1 + PUB_KEY_SIZE and looks
+     * the contact up by the FULL 32-byte key (not a 6-byte prefix). Reply is a LOGIN_SUCCESS or
+     * LOGIN_FAIL push.
+     */
+    fun sendLogin(pubKey: ByteArray, password: String): ByteArray =
         FrameWriter()
             .u8(Cmd.SEND_LOGIN)
-            .bytes(pubKeyPrefix.copyOf(6))
+            .bytes(pubKey.copyOf(32))
             .str(password)
             .build()
 
-    fun sendStatusRequest(pubKeyPrefix: ByteArray): ByteArray =
-        FrameWriter().u8(Cmd.SEND_STATUS_REQ).bytes(pubKeyPrefix.copyOf(6)).build()
+    /** Request a repeater/room's status. Layout: [cmd, pubKey(32)]. Full key, like [sendLogin]. */
+    fun sendStatusRequest(pubKey: ByteArray): ByteArray =
+        FrameWriter().u8(Cmd.SEND_STATUS_REQ).bytes(pubKey.copyOf(32)).build()
 
-    fun logout(pubKeyPrefix: ByteArray): ByteArray =
-        FrameWriter().u8(Cmd.LOGOUT).bytes(pubKeyPrefix.copyOf(6)).build()
+    /** End a repeater/room session. Layout: [cmd, pubKey(32)]. Full key, like [sendLogin]. */
+    fun logout(pubKey: ByteArray): ByteArray =
+        FrameWriter().u8(Cmd.LOGOUT).bytes(pubKey.copyOf(32)).build()
+
+    /**
+     * Send a CLI/admin command to a logged-in repeater/room. This is a text message with
+     * txtType = CLI_DATA addressed by 6-byte prefix; the reply comes back as a CLI_DATA message.
+     */
+    fun sendRepeaterCommand(pubKeyPrefix: ByteArray, command: String, timestamp: Long): ByteArray =
+        sendTextMessage(pubKeyPrefix, command, timestamp, txtType = TxtType.CLI_DATA)
 
     /**
      * Trace a path through specific hops. Layout: [cmd, tag(u32), auth(u32), flags(1), path...].

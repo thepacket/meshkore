@@ -28,6 +28,8 @@ import org.thepacket.meshcore.protocol.Incoming
 import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PacketStats
 import org.thepacket.meshcore.protocol.PayloadType
+import org.thepacket.meshcore.protocol.RepeaterStats
+import org.thepacket.meshcore.protocol.TxtType
 import org.thepacket.meshcore.protocol.hexToBytes
 import org.thepacket.meshcore.protocol.toHex
 import org.thepacket.meshcore.protocol.RadioStats
@@ -41,6 +43,16 @@ import java.util.ArrayDeque
 
 /** Result of an applied settings write, for UI feedback. */
 data class SettingsResult(val label: String, val ok: Boolean)
+
+enum class RepeaterLogin { None, LoggingIn, LoggedIn, Failed }
+
+/** Live state of a managed repeater/room session (keyed by 6-byte key-prefix hex). */
+data class RepeaterSession(
+    val login: RepeaterLogin = RepeaterLogin.None,
+    val isAdmin: Boolean = false,
+    val stats: RepeaterStats? = null,
+    val console: List<String> = emptyList(), // CLI command echoes + responses, oldest first
+)
 
 /**
  * Post-connection protocol orchestration for one companion link: the APP_START
@@ -95,6 +107,10 @@ class MeshSession(
     /** Recently-heard stations (most-recent first). */
     private val _heard = MutableStateFlow<List<HeardEntry>>(emptyList())
     val heard: StateFlow<List<HeardEntry>> = _heard.asStateFlow()
+
+    /** Managed repeater/room sessions, keyed by the node's 6-byte key-prefix hex. */
+    private val _repeaters = MutableStateFlow<Map<String, RepeaterSession>>(emptyMap())
+    val repeaters: StateFlow<Map<String, RepeaterSession>> = _repeaters.asStateFlow()
 
     /** Nodes that answered the last blind discovery request (Tools → Discover). */
     private val _discovered = MutableStateFlow<List<DiscoveredNode>>(emptyList())
@@ -226,6 +242,40 @@ class MeshSession(
     /** Empty the discovered-nodes list (Tools → Discover → Clear). */
     fun clearDiscovered() { _discovered.value = emptyList() }
 
+    // ---- repeater / room management -------------------------------------
+
+    private fun updateRepeater(prefixHex: String, f: (RepeaterSession) -> RepeaterSession) {
+        _repeaters.update { it + (prefixHex to f(it[prefixHex] ?: RepeaterSession())) }
+    }
+
+    /** Log in to a repeater/room with [password]; result arrives as a LOGIN_SUCCESS/FAIL push. */
+    fun loginRepeater(contact: Contact, password: String) {
+        updateRepeater(contact.keyPrefixHex) { it.copy(login = RepeaterLogin.LoggingIn) }
+        scope.launch { runCatching { link.send(Requests.sendLogin(contact.publicKey, password)) } }
+    }
+
+    /** Request a repeater/room's status; the reply lands in [repeaters] as its stats. */
+    fun requestRepeaterStatus(contact: Contact) {
+        scope.launch { runCatching { link.send(Requests.sendStatusRequest(contact.publicKey)) } }
+    }
+
+    /** End the session with a repeater/room. */
+    fun logoutRepeater(contact: Contact) {
+        scope.launch { runCatching { link.send(Requests.logout(contact.publicKey)) } }
+        updateRepeater(contact.keyPrefixHex) { it.copy(login = RepeaterLogin.None) }
+    }
+
+    /** Send a CLI/admin command to a logged-in repeater/room; replies append to its console. */
+    fun sendRepeaterCommand(contact: Contact, command: String) {
+        val cmd = command.trim()
+        if (cmd.isEmpty()) return
+        updateRepeater(contact.keyPrefixHex) { it.copy(console = (it.console + "> $cmd").takeLast(200)) }
+        val ts = System.currentTimeMillis() / 1000
+        scope.launch {
+            runCatching { link.send(Requests.sendRepeaterCommand(contact.publicKey.copyOf(6), cmd, ts)) }
+        }
+    }
+
     /** Add a freshly-discovered node to contacts if we don't already have it (needs the full 32-byte key). */
     private fun addDiscoveredContact(node: DiscoveredNode) {
         if (node.pubKey.size < 32) return
@@ -266,6 +316,7 @@ class MeshSession(
         _heard.value = emptyList()
         _discovered.value = emptyList()
         discoverTag = 0L
+        _repeaters.value = emptyMap()
         _tuning.value = null
         _autoAdd.value = null
         _allowedRepeatFreqs.value = emptyList()
@@ -593,10 +644,23 @@ class MeshSession(
 
             Incoming.MsgWaiting -> startDrain()
             is Incoming.Message -> {
-                storeIncoming(f.message)
+                val m = f.message
+                // CLI_DATA from a repeater/room is a command response, not chat — route to its console.
+                if (!m.isChannel && m.txtType == TxtType.CLI_DATA) {
+                    updateRepeater(m.pubKeyPrefix.toHex()) { it.copy(console = (it.console + m.text).takeLast(200)) }
+                } else {
+                    storeIncoming(m)
+                }
                 // keep draining: ask for the next queued message
                 scope.launch { link.send(Requests.syncNextMessage()) }
             }
+            is Incoming.LoginSuccess -> {
+                val hex = f.pubKeyPrefix.toHex()
+                updateRepeater(hex) { it.copy(login = RepeaterLogin.LoggedIn, isAdmin = f.isAdmin) }
+                _contacts.value.firstOrNull { it.keyPrefixHex == hex }?.let { requestRepeaterStatus(it) }
+            }
+            is Incoming.LoginFail -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(login = RepeaterLogin.Failed) }
+            is Incoming.Status -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(stats = f.stats) }
             Incoming.NoMoreMessages -> draining = false
 
             is Incoming.Sent -> onSentReply(f.result.expectedAck, f.result.estTimeoutMs)

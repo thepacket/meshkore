@@ -56,9 +56,23 @@ sealed interface Incoming {
     data class NewAdvert(val contact: Contact) : Incoming
     data class SendConfirmed(val ackId: Long, val roundTripMs: Long) : Incoming
     data object MsgWaiting : Incoming
-    data object LoginSuccess : Incoming
-    data object LoginFail : Incoming
-    data class Status(val stats: RepeaterStats) : Incoming
+    /** PUSH_CODE_LOGIN_SUCCESS — [isAdmin/permissions] byte then the repeater's 6-byte key prefix. */
+    data class LoginSuccess(val pubKeyPrefix: ByteArray, val isAdmin: Boolean) : Incoming {
+        override fun equals(other: Any?) = other is LoginSuccess &&
+            pubKeyPrefix.contentEquals(other.pubKeyPrefix) && isAdmin == other.isAdmin
+        override fun hashCode() = pubKeyPrefix.contentHashCode() * 31 + isAdmin.hashCode()
+    }
+    /** PUSH_CODE_LOGIN_FAIL — reserved byte then the repeater's 6-byte key prefix. */
+    data class LoginFail(val pubKeyPrefix: ByteArray) : Incoming {
+        override fun equals(other: Any?) = other is LoginFail && pubKeyPrefix.contentEquals(other.pubKeyPrefix)
+        override fun hashCode() = pubKeyPrefix.contentHashCode()
+    }
+    /** PUSH_CODE_STATUS_RESPONSE — the repeater's 6-byte key prefix + its decoded stats. */
+    data class Status(val pubKeyPrefix: ByteArray, val stats: RepeaterStats) : Incoming {
+        override fun equals(other: Any?) = other is Status &&
+            pubKeyPrefix.contentEquals(other.pubKeyPrefix) && stats == other.stats
+        override fun hashCode() = pubKeyPrefix.contentHashCode() * 31 + stats.hashCode()
+    }
     data class Trace(val result: TraceResult) : Incoming
     data class RxPacket(val log: RxLog) : Incoming
     data class NodeDiscovered(val node: DiscoveredNode) : Incoming
@@ -135,9 +149,19 @@ object FrameDecoder {
                 Push.PATH_UPDATED -> Incoming.PathUpdated(r.bytes(minOf(32, r.remaining)))
                 Push.SEND_CONFIRMED -> Incoming.SendConfirmed(r.u32(), if (r.remaining >= 4) r.u32() else 0)
                 Push.MSG_WAITING -> Incoming.MsgWaiting
-                Push.LOGIN_SUCCESS -> Incoming.LoginSuccess
-                Push.LOGIN_FAIL -> Incoming.LoginFail
-                Push.STATUS_RESPONSE -> Incoming.Status(parseRepeaterStats(r))
+                Push.LOGIN_SUCCESS -> {
+                    val perms = if (r.remaining > 0) r.u8() else 0 // permissions / is_admin
+                    Incoming.LoginSuccess(r.bytes(minOf(6, r.remaining)), isAdmin = perms != 0)
+                }
+                Push.LOGIN_FAIL -> {
+                    if (r.remaining > 0) r.u8() // reserved
+                    Incoming.LoginFail(r.bytes(minOf(6, r.remaining)))
+                }
+                Push.STATUS_RESPONSE -> {
+                    r.u8() // reserved
+                    val prefix = r.bytes(minOf(6, r.remaining))
+                    Incoming.Status(prefix, parseRepeaterStats(r))
+                }
                 Push.TRACE_DATA -> Incoming.Trace(parseTrace(r))
                 Push.LOG_RX_DATA -> Incoming.RxPacket(parseRxLog(r))
                 Push.TELEMETRY_RESPONSE -> {
@@ -275,8 +299,6 @@ object FrameDecoder {
     //     err_events u16, last_snr i16 (x4), n_direct_dups u16, n_flood_dups u16,
     //     total_rx_air_time_secs u32, n_recv_errors u32
     private fun parseRepeaterStats(r: FrameReader): RepeaterStats {
-        r.u8()        // reserved
-        r.bytes(6)    // pubKeyPrefix (which repeater answered)
         val batteryMv = r.u16()
         val txQueue = r.u16()
         val noise = r.i16()

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +61,7 @@ fun NodeDetailSheet(
     onRemove: (() -> Unit)? = null,
     onRequestTelemetry: (() -> Unit)? = null,
     telemetry: List<Lpp.Reading>? = null,
+    onManage: (() -> Unit)? = null,
 ) {
     val coords: Pair<Double, Double>? = when {
         isSelf && self != null && (self.advLat != 0 || self.advLon != 0) -> self.advLat / 1e6 to self.advLon / 1e6
@@ -112,6 +114,13 @@ fun NodeDetailSheet(
                     Text("Public key", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
                     Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+
+                if (onManage != null) {
+                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                    Button(onClick = onManage, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (type == ContactType.ROOM) "Manage room" else "Manage repeater")
+                    }
                 }
 
                 if (onRequestTelemetry != null) {

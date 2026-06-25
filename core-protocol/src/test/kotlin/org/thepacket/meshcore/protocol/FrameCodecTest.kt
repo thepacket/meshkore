@@ -296,7 +296,8 @@ class FrameCodecTest {
             .build()
         val d = FrameDecoder.decode(frame)
         assertTrue(d is Incoming.Status)
-        val s = (d as Incoming.Status).stats
+        assertArrayEquals(byteArrayOf(1, 2, 3, 4, 5, 6), (d as Incoming.Status).pubKeyPrefix)
+        val s = d.stats
         assertEquals(3700, s.batteryMilliVolts)
         assertEquals(5, s.txQueueLen)
         assertEquals(-120, s.noiseFloor)
@@ -353,6 +354,41 @@ class FrameCodecTest {
         assertEquals(10.0, n.snrDb, 1e-9)
         assertEquals(7, n.inSnrQ / 4)
         assertArrayEquals(pubkey, n.pubKey)
+    }
+
+    @Test fun repeaterLoginUsesFullKey() {
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val frame = Requests.sendLogin(key, "secret")
+        assertEquals(Cmd.SEND_LOGIN.toByte(), frame[0])
+        assertArrayEquals(key, frame.copyOfRange(1, 33)) // full 32-byte key, not a prefix
+        assertEquals("secret", String(frame.copyOfRange(33, frame.size)))
+    }
+
+    @Test fun repeaterStatusAndLogoutUseFullKey() {
+        val key = ByteArray(32) { it.toByte() }
+        assertArrayEquals(key, Requests.sendStatusRequest(key).copyOfRange(1, 33))
+        assertEquals(33, Requests.sendStatusRequest(key).size)
+        assertArrayEquals(key, Requests.logout(key).copyOfRange(1, 33))
+        assertEquals(33, Requests.logout(key).size)
+    }
+
+    @Test fun decodeLoginSuccessAndFail() {
+        val prefix = byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 1, 2, 3, 4)
+        val ok = FrameDecoder.decode(FrameWriter().u8(Push.LOGIN_SUCCESS).u8(1).bytes(prefix).build())
+        assertTrue(ok is Incoming.LoginSuccess)
+        assertTrue((ok as Incoming.LoginSuccess).isAdmin)
+        assertArrayEquals(prefix, ok.pubKeyPrefix)
+
+        val fail = FrameDecoder.decode(FrameWriter().u8(Push.LOGIN_FAIL).u8(0).bytes(prefix).build())
+        assertTrue(fail is Incoming.LoginFail)
+        assertArrayEquals(prefix, (fail as Incoming.LoginFail).pubKeyPrefix)
+    }
+
+    @Test fun repeaterCommandIsCliTextMessage() {
+        val prefix = ByteArray(6) { (it + 1).toByte() }
+        val frame = Requests.sendRepeaterCommand(prefix, "reboot", 1000)
+        assertEquals(Cmd.SEND_TXT_MSG.toByte(), frame[0])
+        assertEquals(TxtType.CLI_DATA.toByte(), frame[1]) // CLI command type
     }
 
     @Test fun getStatsRequestShape() {

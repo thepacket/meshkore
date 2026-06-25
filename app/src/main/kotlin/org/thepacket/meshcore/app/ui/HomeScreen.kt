@@ -105,9 +105,16 @@ private fun ContactsList(
     onOpen: (String, String) -> Unit,
 ) {
     var detail by remember { mutableStateOf<Contact?>(null) }
+    var manage by remember { mutableStateOf<Contact?>(null) }
     var showImport by remember { mutableStateOf(false) }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+
+    // Repeater/room management takes over the whole pane when open.
+    manage?.let { c ->
+        RepeaterScreen(session, c, onBack = { manage = null })
+        return
+    }
 
     // Sorted alphabetically by display name (case-insensitive).
     val sorted = remember(contacts) {
@@ -174,6 +181,9 @@ private fun ContactsList(
             onRemove = { session.removeContact(c); detail = null },
             onRequestTelemetry = { session.requestTelemetry(c) },
             telemetry = contactTelemetry[c.keyPrefixHex],
+            onManage = if (c.type == ContactType.REPEATER || c.type == ContactType.ROOM) {
+                { manage = c; detail = null }
+            } else null,
         )
     }
 
