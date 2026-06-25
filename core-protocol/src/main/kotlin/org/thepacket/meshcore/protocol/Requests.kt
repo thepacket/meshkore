@@ -330,6 +330,20 @@ object Requests {
             .build()
     }
 
+    /**
+     * Request a repeater/room's access-control list (admin only). Layout:
+     * [cmd, pubKey(32), GET_ACL, 0, 0]. Reply is a BINARY_RESPONSE of (prefix(6), permissions(1)).
+     */
+    fun requestAcl(pubKey: ByteArray): ByteArray {
+        require(pubKey.size >= 32) { "pubKey must be the full 32 bytes" }
+        return FrameWriter()
+            .u8(Cmd.SEND_BINARY_REQ)
+            .bytes(pubKey.copyOf(32))
+            .u8(BinReqType.GET_ACL)
+            .u8(0).u8(0) // reserved
+            .build()
+    }
+
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
     /** Erase all device settings and reboot. Payload is the literal "reset" guard. */

@@ -28,6 +28,8 @@ import org.thepacket.meshcore.protocol.Incoming
 import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PacketStats
 import org.thepacket.meshcore.protocol.PayloadType
+import org.thepacket.meshcore.protocol.Acl
+import org.thepacket.meshcore.protocol.AclEntry
 import org.thepacket.meshcore.protocol.Neighbour
 import org.thepacket.meshcore.protocol.Neighbours
 import org.thepacket.meshcore.protocol.RepeaterStats
@@ -55,6 +57,7 @@ data class RepeaterSession(
     val stats: RepeaterStats? = null,
     val console: List<String> = emptyList(), // CLI command echoes + responses, oldest first
     val neighbours: List<Neighbour>? = null,  // null = not requested yet
+    val acl: List<AclEntry>? = null,          // access-control list (admin only); null = not requested
 )
 
 /**
@@ -277,14 +280,21 @@ class MeshSession(
         updateRepeater(contact.keyPrefixHex) { it.copy(login = RepeaterLogin.None) }
     }
 
-    /** Key-prefix hex of the repeater whose neighbour list we're awaiting (only one at a time). */
-    private var pendingNeighbours: String? = null
+    private enum class BinKind { Neighbours, Acl }
+    /** The in-flight binary request (key-prefix hex + kind); only one at a time. */
+    private var pendingBinaryReq: Pair<String, BinKind>? = null
 
     /** Ask a repeater for its neighbour table; the result lands in [repeaters] as its neighbours. */
     fun requestRepeaterNeighbours(contact: Contact) {
-        pendingNeighbours = contact.keyPrefixHex
+        pendingBinaryReq = contact.keyPrefixHex to BinKind.Neighbours
         val nonce = Random.nextLong(1, 0x1_0000_0000L)
         scope.launch { runCatching { link.send(Requests.requestNeighbours(contact.publicKey, nonce)) } }
+    }
+
+    /** Ask a repeater/room for its access-control list (admin only); lands in [repeaters] as its acl. */
+    fun requestRepeaterAcl(contact: Contact) {
+        pendingBinaryReq = contact.keyPrefixHex to BinKind.Acl
+        scope.launch { runCatching { link.send(Requests.requestAcl(contact.publicKey)) } }
     }
 
     /** Send a CLI/admin command to a logged-in repeater/room; replies append to its console. */
@@ -339,7 +349,7 @@ class MeshSession(
         _discovered.value = emptyList()
         discoverTag = 0L
         _repeaters.value = emptyMap()
-        pendingNeighbours = null
+        pendingBinaryReq = null
         _tuning.value = null
         _autoAdd.value = null
         _allowedRepeatFreqs.value = emptyList()
@@ -684,10 +694,15 @@ class MeshSession(
             }
             is Incoming.LoginFail -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(login = RepeaterLogin.Failed) }
             is Incoming.Status -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(stats = f.stats) }
-            is Incoming.BinaryResponse -> pendingNeighbours?.let { hex ->
-                pendingNeighbours = null
-                val (_, list) = Neighbours.decode(f.data, prefixLen = 6)
-                updateRepeater(hex) { it.copy(neighbours = list) }
+            is Incoming.BinaryResponse -> pendingBinaryReq?.let { (hex, kind) ->
+                pendingBinaryReq = null
+                when (kind) {
+                    BinKind.Neighbours -> {
+                        val (_, list) = Neighbours.decode(f.data, prefixLen = 6)
+                        updateRepeater(hex) { it.copy(neighbours = list) }
+                    }
+                    BinKind.Acl -> updateRepeater(hex) { it.copy(acl = Acl.decode(f.data)) }
+                }
             }
             Incoming.NoMoreMessages -> draining = false
 

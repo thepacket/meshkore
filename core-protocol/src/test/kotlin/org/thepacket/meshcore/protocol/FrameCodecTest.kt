@@ -452,6 +452,30 @@ class FrameCodecTest {
         assertEquals(25.0, r.avg, 1e-9)
     }
 
+    @Test fun requestAclShape() {
+        val key = ByteArray(32) { it.toByte() }
+        val frame = Requests.requestAcl(key)
+        assertEquals(Cmd.SEND_BINARY_REQ.toByte(), frame[0])
+        assertArrayEquals(key, frame.copyOfRange(1, 33))
+        assertEquals(BinReqType.GET_ACL.toByte(), frame[33])
+        assertEquals(36, frame.size) // cmd + key(32) + type + 2 reserved
+    }
+
+    @Test fun decodeAclEntries() {
+        val a = byteArrayOf(0xAA.toByte(), 1, 2, 3, 4, 5)
+        val b = byteArrayOf(0xBB.toByte(), 6, 7, 8, 9, 10)
+        val data = FrameWriter()
+            .bytes(a).u8(AclRole.ADMIN)
+            .bytes(ByteArray(6)).u8(0) // empty slot — skipped
+            .bytes(b).u8(AclRole.READ_ONLY)
+            .build()
+        val acl = Acl.decode(data)
+        assertEquals(2, acl.size)
+        assertArrayEquals(a, acl[0].pubKeyPrefix)
+        assertEquals("Admin", acl[0].roleName)
+        assertEquals("Read-only", acl[1].roleName)
+    }
+
     @Test fun getStatsRequestShape() {
         assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
             Requests.getStats(StatsType.RADIO))

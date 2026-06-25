@@ -39,15 +39,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.RepeaterLogin
 import org.thepacket.meshcore.app.RepeaterSession
+import org.thepacket.meshcore.protocol.AclEntry
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.Neighbour
 import org.thepacket.meshcore.protocol.RepeaterStats
+import org.thepacket.meshcore.protocol.SelfInfo
+import org.thepacket.meshcore.protocol.toHex
 
 /** Remote management for a repeater/room: log in, view status, and run admin/CLI commands. */
 @Composable
 fun RepeaterScreen(session: MeshSession, contact: Contact, onBack: () -> Unit) {
     val repeaters by session.repeaters.collectAsStateWithLifecycle()
     val contacts by session.contacts.collectAsStateWithLifecycle()
+    val self by session.self.collectAsStateWithLifecycle()
     val s = repeaters[contact.keyPrefixHex] ?: RepeaterSession()
 
     Column(
@@ -61,12 +65,12 @@ fun RepeaterScreen(session: MeshSession, contact: Contact, onBack: () -> Unit) {
         }
 
         if (s.login != RepeaterLogin.LoggedIn) LoginForm(session, contact, s)
-        else ManagementBody(session, contact, s, contacts)
+        else ManagementBody(session, contact, s, contacts, self)
     }
 }
 
 @Composable
-private fun NeighboursCard(neighbours: List<Neighbour>, contacts: List<Contact>) {
+private fun NeighboursCard(neighbours: List<Neighbour>, contacts: List<Contact>, self: SelfInfo?) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text("Neighbours (${neighbours.size})", style = MaterialTheme.typography.titleMedium)
@@ -75,8 +79,7 @@ private fun NeighboursCard(neighbours: List<Neighbour>, contacts: List<Contact>)
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             } else {
                 neighbours.forEach { n ->
-                    val name = contacts.firstOrNull { it.keyPrefixHex == n.keyPrefixHex }
-                        ?.name?.ifBlank { null } ?: n.keyPrefixHex
+                    val name = resolveNodeName(n.keyPrefixHex, contacts, self)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text(name, fontWeight = FontWeight.Medium)
@@ -91,6 +94,36 @@ private fun NeighboursCard(neighbours: List<Neighbour>, contacts: List<Contact>)
             }
         }
     }
+}
+
+@Composable
+private fun AclCard(acl: List<AclEntry>, contacts: List<Contact>, self: SelfInfo?) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Access list (${acl.size})", style = MaterialTheme.typography.titleMedium)
+            if (acl.isEmpty()) {
+                Text("No clients registered.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            } else {
+                acl.forEach { e ->
+                    val name = resolveNodeName(e.keyPrefixHex, contacts, self)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(name, modifier = Modifier.weight(1f))
+                        Text(e.roleName, color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 12.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Resolve a 6-byte key-prefix hex to a friendly name: our own node, a contact, else the prefix. */
+private fun resolveNodeName(prefixHex: String, contacts: List<Contact>, self: SelfInfo?): String {
+    if (self != null && self.publicKey.copyOf(6).toHex() == prefixHex) {
+        return self.name.ifBlank { prefixHex } + " (this node)"
+    }
+    return contacts.firstOrNull { it.keyPrefixHex == prefixHex }?.name?.ifBlank { null } ?: prefixHex
 }
 
 private fun fmtAge(secs: Int): String = when {
@@ -131,7 +164,9 @@ private fun LoginForm(session: MeshSession, contact: Contact, s: RepeaterSession
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ManagementBody(session: MeshSession, contact: Contact, s: RepeaterSession, contacts: List<Contact>) {
+private fun ManagementBody(
+    session: MeshSession, contact: Contact, s: RepeaterSession, contacts: List<Contact>, self: SelfInfo?,
+) {
     var command by remember { mutableStateOf("") }
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
@@ -149,7 +184,14 @@ private fun ManagementBody(session: MeshSession, contact: Contact, s: RepeaterSe
     OutlinedButton(onClick = { session.requestRepeaterNeighbours(contact) }, modifier = Modifier.fillMaxWidth()) {
         Text(if (s.neighbours == null) "Get neighbours" else "Refresh neighbours")
     }
-    s.neighbours?.let { NeighboursCard(it, contacts) }
+    s.neighbours?.let { NeighboursCard(it, contacts, self) }
+
+    if (s.isAdmin) {
+        OutlinedButton(onClick = { session.requestRepeaterAcl(contact) }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (s.acl == null) "Get access list" else "Refresh access list")
+        }
+        s.acl?.let { AclCard(it, contacts, self) }
+    }
 
     // Quick read-only commands; anything else (set/reboot/…) goes in the field below.
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

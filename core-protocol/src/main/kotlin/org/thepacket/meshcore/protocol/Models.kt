@@ -153,6 +153,15 @@ data class DiscoveredNode(
     override fun hashCode() = pubKey.contentHashCode()
 }
 
+/** One client in a repeater/room's access-control list (REQ_TYPE_GET_ACCESS_LIST reply). */
+data class AclEntry(val pubKeyPrefix: ByteArray, val permissions: Int) {
+    val keyPrefixHex: String get() = pubKeyPrefix.copyOf(6).toHex()
+    val roleName: String get() = AclRole.name(permissions)
+
+    override fun equals(other: Any?) = other is AclEntry && pubKeyPrefix.contentEquals(other.pubKeyPrefix)
+    override fun hashCode() = pubKeyPrefix.contentHashCode()
+}
+
 /** Min/max/avg of one telemetry channel over a time window (REQ_TYPE_GET_AVG_MIN_MAX reply). */
 data class MmaReading(val channel: Int, val type: Int, val min: Double, val max: Double, val avg: Double)
 

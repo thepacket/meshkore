@@ -108,6 +108,21 @@ sealed interface Incoming {
     }
 }
 
+/** Decodes a REQ_TYPE_GET_ACCESS_LIST binary-response payload: (keyPrefix(6), permissions(1))*. */
+object Acl {
+    fun decode(data: ByteArray): List<AclEntry> {
+        val out = ArrayList<AclEntry>()
+        var i = 0
+        while (i + 7 <= data.size) {
+            val key = data.copyOfRange(i, i + 6)
+            val perm = data[i + 6].toInt() and 0xFF
+            if (key.any { it.toInt() != 0 }) out.add(AclEntry(key, perm)) // skip empty slots
+            i += 7
+        }
+        return out
+    }
+}
+
 /** Decodes a REQ_TYPE_GET_AVG_MIN_MAX (telemetry min/max/avg) binary-response payload. */
 object Mma {
     // [now(u32), then per channel: channel(1), lpp_type(1), min(sz), max(sz), avg(sz)] (sz per LPP type).

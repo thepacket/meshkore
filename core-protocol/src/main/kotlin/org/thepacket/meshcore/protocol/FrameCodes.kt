@@ -137,6 +137,21 @@ object CtlType {
     const val NODE_DISCOVER_RESP = 0x90
 }
 
+/** Repeater/room ACL roles (low 2 bits of a client's permissions byte). */
+object AclRole {
+    const val MASK = 3
+    const val GUEST = 0
+    const val READ_ONLY = 1
+    const val READ_WRITE = 2
+    const val ADMIN = 3
+    fun name(permissions: Int): String = when (permissions and MASK) {
+        ADMIN -> "Admin"
+        READ_WRITE -> "Read/write"
+        READ_ONLY -> "Read-only"
+        else -> "Guest"
+    }
+}
+
 /** Binary-request sub-types (first byte of a CMD_SEND_BINARY_REQ payload). */
 object BinReqType {
     const val GET_STATUS = 0x01
