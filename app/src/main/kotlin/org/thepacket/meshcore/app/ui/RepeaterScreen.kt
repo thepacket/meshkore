@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -39,15 +40,20 @@ import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.RepeaterLogin
 import org.thepacket.meshcore.app.RepeaterSession
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.Neighbour
 import org.thepacket.meshcore.protocol.RepeaterStats
 
 /** Remote management for a repeater/room: log in, view status, and run admin/CLI commands. */
 @Composable
 fun RepeaterScreen(session: MeshSession, contact: Contact, onBack: () -> Unit) {
     val repeaters by session.repeaters.collectAsStateWithLifecycle()
+    val contacts by session.contacts.collectAsStateWithLifecycle()
     val s = repeaters[contact.keyPrefixHex] ?: RepeaterSession()
 
-    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).imePadding().padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
             Text(contact.name.ifBlank { contact.keyPrefixHex },
@@ -55,8 +61,43 @@ fun RepeaterScreen(session: MeshSession, contact: Contact, onBack: () -> Unit) {
         }
 
         if (s.login != RepeaterLogin.LoggedIn) LoginForm(session, contact, s)
-        else ManagementBody(session, contact, s)
+        else ManagementBody(session, contact, s, contacts)
     }
+}
+
+@Composable
+private fun NeighboursCard(neighbours: List<Neighbour>, contacts: List<Contact>) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Neighbours (${neighbours.size})", style = MaterialTheme.typography.titleMedium)
+            if (neighbours.isEmpty()) {
+                Text("None reported.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            } else {
+                neighbours.forEach { n ->
+                    val name = contacts.firstOrNull { it.keyPrefixHex == n.keyPrefixHex }
+                        ?.name?.ifBlank { null } ?: n.keyPrefixHex
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.weight(1f)) {
+                            Text(name, fontWeight = FontWeight.Medium)
+                            Text("heard ${fmtAge(n.secsAgo)}", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        }
+                        Text("SNR %.1f dB".format(n.snrDb),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(start = 12.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun fmtAge(secs: Int): String = when {
+    secs < 60 -> "${secs}s ago"
+    secs < 3600 -> "${secs / 60}m ago"
+    secs < 86400 -> "${secs / 3600}h ago"
+    else -> "${secs / 86400}d ago"
 }
 
 @Composable
@@ -76,15 +117,21 @@ private fun LoginForm(session: MeshSession, contact: Contact, s: RepeaterSession
         enabled = s.login != RepeaterLogin.LoggingIn,
         modifier = Modifier.fillMaxWidth(),
     ) { Text(if (s.login == RepeaterLogin.LoggingIn) "Logging in…" else "Log in") }
-    if (s.login == RepeaterLogin.Failed) {
-        Text("Login failed — wrong password, or the node is unreachable.",
+    when (s.login) {
+        RepeaterLogin.LoggingIn -> Text(
+            "Waiting for the node to respond — can take a while over the mesh.",
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.bodySmall)
+        RepeaterLogin.Failed -> Text(
+            "Login failed — wrong password, or no response from the node.",
             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        else -> {}
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ManagementBody(session: MeshSession, contact: Contact, s: RepeaterSession) {
+private fun ManagementBody(session: MeshSession, contact: Contact, s: RepeaterSession, contacts: List<Contact>) {
     var command by remember { mutableStateOf("") }
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
@@ -98,6 +145,11 @@ private fun ManagementBody(session: MeshSession, contact: Contact, s: RepeaterSe
     }
 
     s.stats?.let { StatusCard(it) }
+
+    OutlinedButton(onClick = { session.requestRepeaterNeighbours(contact) }, modifier = Modifier.fillMaxWidth()) {
+        Text(if (s.neighbours == null) "Get neighbours" else "Refresh neighbours")
+    }
+    s.neighbours?.let { NeighboursCard(it, contacts) }
 
     // Quick read-only commands; anything else (set/reboot/…) goes in the field below.
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

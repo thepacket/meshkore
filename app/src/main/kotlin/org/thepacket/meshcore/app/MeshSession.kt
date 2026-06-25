@@ -28,6 +28,8 @@ import org.thepacket.meshcore.protocol.Incoming
 import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PacketStats
 import org.thepacket.meshcore.protocol.PayloadType
+import org.thepacket.meshcore.protocol.Neighbour
+import org.thepacket.meshcore.protocol.Neighbours
 import org.thepacket.meshcore.protocol.RepeaterStats
 import org.thepacket.meshcore.protocol.TxtType
 import org.thepacket.meshcore.protocol.hexToBytes
@@ -52,6 +54,7 @@ data class RepeaterSession(
     val isAdmin: Boolean = false,
     val stats: RepeaterStats? = null,
     val console: List<String> = emptyList(), // CLI command echoes + responses, oldest first
+    val neighbours: List<Neighbour>? = null,  // null = not requested yet
 )
 
 /**
@@ -250,8 +253,17 @@ class MeshSession(
 
     /** Log in to a repeater/room with [password]; result arrives as a LOGIN_SUCCESS/FAIL push. */
     fun loginRepeater(contact: Contact, password: String) {
-        updateRepeater(contact.keyPrefixHex) { it.copy(login = RepeaterLogin.LoggingIn) }
+        val hex = contact.keyPrefixHex
+        updateRepeater(hex) { it.copy(login = RepeaterLogin.LoggingIn) }
         scope.launch { runCatching { link.send(Requests.sendLogin(contact.publicKey, password)) } }
+        // A wrong password usually gets no reply at all (the node won't confirm it), and even a
+        // success can be lost over the mesh — so fail the attempt if nothing arrives in time.
+        scope.launch {
+            delay(20_000)
+            if (_repeaters.value[hex]?.login == RepeaterLogin.LoggingIn) {
+                updateRepeater(hex) { it.copy(login = RepeaterLogin.Failed) }
+            }
+        }
     }
 
     /** Request a repeater/room's status; the reply lands in [repeaters] as its stats. */
@@ -263,6 +275,16 @@ class MeshSession(
     fun logoutRepeater(contact: Contact) {
         scope.launch { runCatching { link.send(Requests.logout(contact.publicKey)) } }
         updateRepeater(contact.keyPrefixHex) { it.copy(login = RepeaterLogin.None) }
+    }
+
+    /** Key-prefix hex of the repeater whose neighbour list we're awaiting (only one at a time). */
+    private var pendingNeighbours: String? = null
+
+    /** Ask a repeater for its neighbour table; the result lands in [repeaters] as its neighbours. */
+    fun requestRepeaterNeighbours(contact: Contact) {
+        pendingNeighbours = contact.keyPrefixHex
+        val nonce = Random.nextLong(1, 0x1_0000_0000L)
+        scope.launch { runCatching { link.send(Requests.requestNeighbours(contact.publicKey, nonce)) } }
     }
 
     /** Send a CLI/admin command to a logged-in repeater/room; replies append to its console. */
@@ -317,6 +339,7 @@ class MeshSession(
         _discovered.value = emptyList()
         discoverTag = 0L
         _repeaters.value = emptyMap()
+        pendingNeighbours = null
         _tuning.value = null
         _autoAdd.value = null
         _allowedRepeatFreqs.value = emptyList()
@@ -661,6 +684,11 @@ class MeshSession(
             }
             is Incoming.LoginFail -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(login = RepeaterLogin.Failed) }
             is Incoming.Status -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(stats = f.stats) }
+            is Incoming.BinaryResponse -> pendingNeighbours?.let { hex ->
+                pendingNeighbours = null
+                val (_, list) = Neighbours.decode(f.data, prefixLen = 6)
+                updateRepeater(hex) { it.copy(neighbours = list) }
+            }
             Incoming.NoMoreMessages -> draining = false
 
             is Incoming.Sent -> onSentReply(f.result.expectedAck, f.result.estTimeoutMs)

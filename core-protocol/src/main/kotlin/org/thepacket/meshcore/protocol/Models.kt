@@ -153,6 +153,19 @@ data class DiscoveredNode(
     override fun hashCode() = pubKey.contentHashCode()
 }
 
+/** A node in a repeater's neighbour table (REQ_TYPE_GET_NEIGHBOURS reply). */
+data class Neighbour(
+    val pubKey: ByteArray,  // key prefix of the requested length
+    val secsAgo: Int,       // how long ago this neighbour was last heard
+    val snrQ: Int,          // SNR (quarter-dB)
+) {
+    val keyPrefixHex: String get() = pubKey.copyOf(minOf(6, pubKey.size)).toHex()
+    val snrDb: Double get() = snrQ / 4.0
+
+    override fun equals(other: Any?) = other is Neighbour && pubKey.contentEquals(other.pubKey)
+    override fun hashCode() = pubKey.contentHashCode()
+}
+
 /** One hop of a trace-route result (PUSH_CODE_TRACE_DATA). */
 data class TraceHop(val hashByte: Int, val snrQ: Int) {
     /** SNR is transmitted as quarter-dB (snr * 4). */

@@ -391,6 +391,40 @@ class FrameCodecTest {
         assertEquals(TxtType.CLI_DATA.toByte(), frame[1]) // CLI command type
     }
 
+    @Test fun requestNeighboursShape() {
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val frame = Requests.requestNeighbours(key, nonce = 0xAABBCCDD, count = 255, prefixLength = 6, orderBy = 2)
+        assertEquals(Cmd.SEND_BINARY_REQ.toByte(), frame[0])
+        assertArrayEquals(key, frame.copyOfRange(1, 33))
+        assertEquals(BinReqType.GET_NEIGHBOURS.toByte(), frame[33])
+        assertEquals(0.toByte(), frame[34])           // version
+        assertEquals(255.toByte(), frame[35])         // count
+        assertArrayEquals(byteArrayOf(0, 0), frame.copyOfRange(36, 38)) // offset
+        assertEquals(2.toByte(), frame[38])           // orderBy
+        assertEquals(6.toByte(), frame[39])           // prefixLength
+    }
+
+    @Test fun decodeBinaryResponseAndNeighbours() {
+        // BINARY_RESPONSE: [code, reserved, tag(4), data...]; data = neighbours payload.
+        val data = FrameWriter()
+            .u16(3)        // total neighbours
+            .u16(2)        // results in this batch
+            .bytes(byteArrayOf(0xAA.toByte(), 1, 2, 3, 4, 5)).i32(30).u8(40)   // SNR 40/4 = 10 dB
+            .bytes(byteArrayOf(0xBB.toByte(), 6, 7, 8, 9, 10)).i32(120).u8(-20)
+            .build()
+        val frame = FrameWriter().u8(Push.BINARY_RESPONSE).u8(0).u32(0x11223344).bytes(data).build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.BinaryResponse)
+        assertEquals(0x11223344L, (d as Incoming.BinaryResponse).tag)
+
+        val (total, list) = Neighbours.decode(d.data, prefixLen = 6)
+        assertEquals(3, total)
+        assertEquals(2, list.size)
+        assertEquals(30, list[0].secsAgo)
+        assertEquals(10.0, list[0].snrDb, 1e-9)
+        assertEquals(120, list[1].secsAgo)
+    }
+
     @Test fun getStatsRequestShape() {
         assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
             Requests.getStats(StatsType.RADIO))

@@ -283,6 +283,35 @@ object Requests {
             .u32(tag)
             .build()
 
+    /**
+     * Ask a repeater for its neighbour table (nodes it has heard, zero-hop). A binary request to
+     * the FULL 32-byte key; the reply arrives as a BINARY_RESPONSE carrying, per neighbour, a
+     * `prefixLength`-byte key prefix + secs-ago + SNR. Verified against simple_repeater
+     * REQ_TYPE_GET_NEIGHBOURS. Layout:
+     *   [cmd, pubKey(32), GET_NEIGHBOURS, version(0), count, offset(u16), orderBy, prefixLength, nonce(u32)]
+     * orderBy: 0 newest→oldest, 1 oldest→newest, 2 strongest→weakest, 3 weakest→strongest.
+     */
+    fun requestNeighbours(
+        pubKey: ByteArray,
+        nonce: Long,
+        count: Int = 255,
+        prefixLength: Int = 6,
+        orderBy: Int = 2,
+    ): ByteArray {
+        require(pubKey.size >= 32) { "pubKey must be the full 32 bytes" }
+        return FrameWriter()
+            .u8(Cmd.SEND_BINARY_REQ)
+            .bytes(pubKey.copyOf(32))
+            .u8(BinReqType.GET_NEIGHBOURS)
+            .u8(0) // request version
+            .u8(count)
+            .u16(0) // offset
+            .u8(orderBy)
+            .u8(prefixLength)
+            .u32(nonce)
+            .build()
+    }
+
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
     /** Erase all device settings and reboot. Payload is the literal "reset" guard. */

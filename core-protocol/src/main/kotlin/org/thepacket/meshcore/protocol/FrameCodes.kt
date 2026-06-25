@@ -137,6 +137,15 @@ object CtlType {
     const val NODE_DISCOVER_RESP = 0x90
 }
 
+/** Binary-request sub-types (first byte of a CMD_SEND_BINARY_REQ payload). */
+object BinReqType {
+    const val GET_STATUS = 0x01
+    const val GET_TELEMETRY = 0x03
+    const val GET_MMA = 0x04          // telemetry min/max/avg over a time window
+    const val GET_ACL = 0x05
+    const val GET_NEIGHBOURS = 0x06
+}
+
 /** Text message types (TxtDataHelpers.h). */
 object TxtType {
     const val PLAIN = 0

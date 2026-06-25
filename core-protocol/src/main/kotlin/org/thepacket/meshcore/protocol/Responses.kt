@@ -76,6 +76,11 @@ sealed interface Incoming {
     data class Trace(val result: TraceResult) : Incoming
     data class RxPacket(val log: RxLog) : Incoming
     data class NodeDiscovered(val node: DiscoveredNode) : Incoming
+    /** PUSH_CODE_BINARY_RESPONSE — a tagged reply to a CMD_SEND_BINARY_REQ; [data] is type-specific. */
+    data class BinaryResponse(val tag: Long, val data: ByteArray) : Incoming {
+        override fun equals(other: Any?) = other is BinaryResponse && tag == other.tag && data.contentEquals(other.data)
+        override fun hashCode() = tag.hashCode() * 31 + data.contentHashCode()
+    }
     /** RESP_CODE_ALLOWED_REPEAT_FREQ — frequency ranges (kHz) where client-repeat is permitted. */
     data class AllowedRepeatFreqs(val rangesKhz: List<LongRange>) : Incoming
 
@@ -100,6 +105,26 @@ sealed interface Incoming {
     data class Raw(val code: Int, val payload: ByteArray) : Incoming {
         override fun equals(other: Any?) = other is Raw && code == other.code && payload.contentEquals(other.payload)
         override fun hashCode() = code * 31 + payload.contentHashCode()
+    }
+}
+
+/** Decodes a REQ_TYPE_GET_NEIGHBOURS binary-response payload. */
+object Neighbours {
+    // [total(i16), count(i16), then per neighbour: keyPrefix(prefixLen), secsAgo(i32), snr(i8 x4)]
+    fun decode(data: ByteArray, prefixLen: Int): Pair<Int, List<Neighbour>> {
+        val r = FrameReader(data)
+        if (r.remaining < 4) return 0 to emptyList()
+        val total = r.i16()
+        val count = r.i16().coerceAtLeast(0)
+        val list = ArrayList<Neighbour>(count)
+        repeat(count) {
+            if (r.remaining < prefixLen + 5) return@repeat
+            val key = r.bytes(prefixLen)
+            val secsAgo = r.i32()
+            val snr = r.i8()
+            list.add(Neighbour(key, secsAgo, snr))
+        }
+        return total to list
     }
 }
 
@@ -170,6 +195,11 @@ object FrameDecoder {
                     Incoming.Telemetry(prefix, Lpp.decode(r.rest()))
                 }
                 Push.CONTROL_DATA -> parseControlData(r) ?: Incoming.Raw(code, frame.copyOfRange(1, frame.size))
+                Push.BINARY_RESPONSE -> {
+                    r.u8() // reserved
+                    val tag = r.u32()
+                    Incoming.BinaryResponse(tag, r.rest())
+                }
 
                 else -> Incoming.Raw(code, frame.copyOfRange(1, frame.size))
             }
