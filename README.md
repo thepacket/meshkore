@@ -4,12 +4,12 @@
 > hardware**, but this is young software — expect rough edges and breaking changes.
 
 An open-source (**MIT**) Android client for [MeshCore](https://github.com/meshcore-dev/MeshCore)
-**companion** devices over **BLE** — an alternative to the official app, built natively in
+devices over **BLE** — an alternative to the official app, built natively in
 **Kotlin + Jetpack Compose**.
 
 ## Features
 
-Connect to a companion device over BLE — including **PIN/passkey pairing** for
+Connect to a MeshCore device over BLE — including **PIN/passkey pairing** for
 MITM-protected nodes (you're prompted for the device PIN on the first connection).
 The app has seven tabs — **Chats · Heard · Packets · Stats · Map · Tools · Settings**:
 
