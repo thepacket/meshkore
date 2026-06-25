@@ -44,9 +44,19 @@ class CompanionScanner(context: Context) {
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
+        // Per-session cache of the best *live* advertised name seen for each device. The name
+        // often rides only in the scan response, so some advertisement packets carry none; in
+        // those, BluetoothDevice.name returns Android's cached GAP name, which stays stale after
+        // a node is renamed (showing the old "MeshCore-<hex>"). Once we've seen the live name,
+        // keep it so the list doesn't flicker back to the cached one.
+        val liveNames = HashMap<String, String>()
+
         val cb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                trySend(ScannedDevice(result.device, result.scanRecord?.deviceName ?: result.device.name, result.rssi))
+                val addr = result.device.address
+                result.scanRecord?.deviceName?.let { liveNames[addr] = it }
+                val name = liveNames[addr] ?: result.device.name
+                trySend(ScannedDevice(result.device, name, result.rssi))
             }
             override fun onScanFailed(errorCode: Int) {
                 close(BleException("scan failed: $errorCode"))
