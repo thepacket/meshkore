@@ -54,6 +54,11 @@ The app has seven tabs — **Chats · Heard · Packets · Stats · Map · Tools 
 The only runtime permissions requested are Bluetooth (and, on Android ≤ 11,
 location, which the OS requires for BLE scanning).
 
+> **Not yet implemented:** dedicated support for **Room Server** and **Sensor**
+> nodes. They're discovered and shown on the map and in lists, but room-server
+> features (shared message board, member list) and sensor features (environmental
+> readings, telemetry history) are still to come.
+
 ## Status
 
 | Area | State |
