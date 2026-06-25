@@ -425,6 +425,33 @@ class FrameCodecTest {
         assertEquals(120, list[1].secsAgo)
     }
 
+    @Test fun requestMmaShape() {
+        val key = ByteArray(32) { it.toByte() }
+        val frame = Requests.requestMma(key, startSecsAgo = 3600, endSecsAgo = 0)
+        assertEquals(Cmd.SEND_BINARY_REQ.toByte(), frame[0])
+        assertArrayEquals(key, frame.copyOfRange(1, 33))
+        assertEquals(BinReqType.GET_MMA.toByte(), frame[33])
+        assertArrayEquals(byteArrayOf(0x10, 0x0E, 0, 0), frame.copyOfRange(34, 38)) // 3600 LE
+        assertArrayEquals(byteArrayOf(0, 0, 0, 0), frame.copyOfRange(38, 42))       // end = 0
+    }
+
+    @Test fun decodeMmaTriples() {
+        // data = [now(4), (channel, type, min, max, avg per LPP type)]; temperature is i16 x10.
+        val data = FrameWriter()
+            .u32(1000)                 // now
+            .u8(1).u8(Lpp.TEMPERATURE) // channel 1, temperature
+            // min/max/avg as big-endian i16 ×10 (LPP is big-endian): 20.0 / 30.0 / 25.0
+            .bytes(byteArrayOf(0x00, 0xC8.toByte(), 0x01, 0x2C, 0x00, 0xFA.toByte()))
+            .build()
+        val readings = Mma.decode(data)
+        assertEquals(1, readings.size)
+        val r = readings[0]
+        assertEquals(Lpp.TEMPERATURE, r.type)
+        assertEquals(20.0, r.min, 1e-9)
+        assertEquals(30.0, r.max, 1e-9)
+        assertEquals(25.0, r.avg, 1e-9)
+    }
+
     @Test fun getStatsRequestShape() {
         assertArrayEquals(byteArrayOf(Cmd.GET_STATS.toByte(), StatsType.RADIO.toByte()),
             Requests.getStats(StatsType.RADIO))

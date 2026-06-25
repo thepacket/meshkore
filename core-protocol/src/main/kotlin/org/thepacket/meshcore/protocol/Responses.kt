@@ -108,6 +108,27 @@ sealed interface Incoming {
     }
 }
 
+/** Decodes a REQ_TYPE_GET_AVG_MIN_MAX (telemetry min/max/avg) binary-response payload. */
+object Mma {
+    // [now(u32), then per channel: channel(1), lpp_type(1), min(sz), max(sz), avg(sz)] (sz per LPP type).
+    fun decode(data: ByteArray): List<MmaReading> {
+        val out = ArrayList<MmaReading>()
+        var i = 4 // skip the node's 'now' timestamp
+        while (i + 2 <= data.size) {
+            val ch = data[i].toInt() and 0xFF
+            val type = data[i + 1].toInt() and 0xFF
+            i += 2
+            val sz = Lpp.dataSize(type)
+            if (sz <= 0 || i + 3 * sz > data.size) break
+            val min = Lpp.decodeValue(type, data, i); i += sz
+            val max = Lpp.decodeValue(type, data, i); i += sz
+            val avg = Lpp.decodeValue(type, data, i); i += sz
+            out.add(MmaReading(ch, type, min, max, avg))
+        }
+        return out
+    }
+}
+
 /** Decodes a REQ_TYPE_GET_NEIGHBOURS binary-response payload. */
 object Neighbours {
     // [total(i16), count(i16), then per neighbour: keyPrefix(prefixLen), secsAgo(i32), snr(i8 x4)]

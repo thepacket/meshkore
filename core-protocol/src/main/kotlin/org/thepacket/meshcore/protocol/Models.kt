@@ -153,6 +153,9 @@ data class DiscoveredNode(
     override fun hashCode() = pubKey.contentHashCode()
 }
 
+/** Min/max/avg of one telemetry channel over a time window (REQ_TYPE_GET_AVG_MIN_MAX reply). */
+data class MmaReading(val channel: Int, val type: Int, val min: Double, val max: Double, val avg: Double)
+
 /** A node in a repeater's neighbour table (REQ_TYPE_GET_NEIGHBOURS reply). */
 data class Neighbour(
     val pubKey: ByteArray,  // key prefix of the requested length

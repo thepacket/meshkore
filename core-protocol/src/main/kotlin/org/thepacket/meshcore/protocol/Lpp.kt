@@ -37,6 +37,10 @@ object Lpp {
         return out
     }
 
+    /** Decode one scalar value of [type] at [off] (used for MMA min/max/avg triples). */
+    fun decodeValue(type: Int, buf: ByteArray, off: Int): Double =
+        readValues(type, buf, off, dataSize(type)).firstOrNull() ?: 0.0
+
     private fun readValues(type: Int, buf: ByteArray, off: Int, size: Int): List<Double> = when (type) {
         GPS -> listOf(
             getFloat(buf, off, 3, 10000, true),

@@ -312,6 +312,24 @@ object Requests {
             .build()
     }
 
+    /**
+     * Request telemetry min/max/avg over a time window from a logged-in node (read-only ACL).
+     * Layout: [cmd, pubKey(32), GET_MMA, startSecsAgo(u32), endSecsAgo(u32), 0, 0]. Verified
+     * against simple_sensor REQ_TYPE_GET_AVG_MIN_MAX. Reply is a BINARY_RESPONSE.
+     */
+    fun requestMma(pubKey: ByteArray, startSecsAgo: Long, endSecsAgo: Long): ByteArray {
+        require(pubKey.size >= 32) { "pubKey must be the full 32 bytes" }
+        return FrameWriter()
+            .u8(Cmd.SEND_BINARY_REQ)
+            .bytes(pubKey.copyOf(32))
+            .u8(BinReqType.GET_MMA)
+            .u32(startSecsAgo)
+            .u32(endSecsAgo)
+            .u8(0) // reserved (res1)
+            .u8(0) // reserved (res2)
+            .build()
+    }
+
     fun reboot(): ByteArray = FrameWriter().u8(Cmd.REBOOT).build()
 
     /** Erase all device settings and reboot. Payload is the literal "reset" guard. */
