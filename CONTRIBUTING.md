@@ -1,11 +1,8 @@
 # Contributing
 
-> ⚠️ **Early development.** This project is at a very early stage and changes
-> frequently.
-
-**meshcore-android** is an independent, personal Android client for
-[MeshCore](https://github.com/meshcore-dev/MeshCore) companion devices, maintained by
-[@thepacket](https://github.com/thepacket). It implements the MeshCore companion
+**MeshKore** is an independent, personal Android client for
+[MeshCore](https://github.com/meshcore-dev/MeshCore) devices, maintained by
+[@thepacket](https://github.com/thepacket). It implements the MeshCore
 serial/BLE protocol; all credit for the underlying MeshCore mesh stack, firmware, and
 protocol belongs to the upstream project. This project is not affiliated with or
 endorsed by MeshCore.
@@ -20,10 +17,10 @@ your own version (the MIT license permits it).
 
 ## Issues
 
-Bug reports and ideas are welcome via the **Issues** tracker, but there is no
-guarantee of a response or that anything will be acted on. Please include your
-Android version, device model, and the companion firmware build/board you connected
-to, plus steps to reproduce.
+Bug reports, ideas, and feedback are genuinely welcome via the **Issues** tracker —
+I read them and will do my best to respond and act on them. For bug reports, please
+include your Android version, device model, and the MeshCore firmware build/board you
+connected to, plus steps to reproduce.
 
 ## License
 
