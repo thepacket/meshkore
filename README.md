@@ -1,8 +1,5 @@
 # MeshKore
 
-> ⚠️ **Early development.** The core feature set is built and **validated on real
-> hardware**, but this is young software — expect rough edges and breaking changes.
-
 An open-source (**MIT**) Android client for [MeshCore](https://github.com/meshcore-dev/MeshCore)
 devices over **BLE** — an alternative to the official app, built natively in
 **Kotlin + Jetpack Compose**.
