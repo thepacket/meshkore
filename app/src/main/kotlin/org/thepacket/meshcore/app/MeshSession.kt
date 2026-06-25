@@ -171,6 +171,10 @@ class MeshSession(
     private val _importedContact = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val importedContact: SharedFlow<String> = _importedContact.asSharedFlow()
 
+    /** Emitted for each freshly-received incoming message — drives background notifications. */
+    private val _incomingMessages = MutableSharedFlow<ChatMessage>(extraBufferCapacity = 16)
+    val incomingMessages: SharedFlow<ChatMessage> = _incomingMessages.asSharedFlow()
+
     /** Labels of settings writes awaiting their OK/ERR reply (FIFO; link is sequential). */
     private val pendingSettings = ArrayDeque<String>()
 
@@ -840,17 +844,17 @@ class MeshSession(
         // Dedup: skip if an identical incoming message is already stored (e.g. across reconnects).
         val existing = _messages.value[convId].orEmpty()
         if (existing.any { it.incoming && it.timestampSecs == m.senderTimestamp && it.text == m.text }) return
-        appendMessage(
-            ChatMessage(
-                localId = ++localIdSeq,
-                conversationId = convId,
-                text = m.text,
-                timestampSecs = m.senderTimestamp,
-                incoming = true,
-                status = MsgStatus.Received,
-                snrDb = if (m.snrQ != 0) m.snrDb else null,
-            )
+        val msg = ChatMessage(
+            localId = ++localIdSeq,
+            conversationId = convId,
+            text = m.text,
+            timestampSecs = m.senderTimestamp,
+            incoming = true,
+            status = MsgStatus.Received,
+            snrDb = if (m.snrQ != 0) m.snrDb else null,
         )
+        appendMessage(msg)
+        _incomingMessages.tryEmit(msg)
     }
 
     private fun onSentReply(expectedAck: Long, estTimeoutMs: Long) {

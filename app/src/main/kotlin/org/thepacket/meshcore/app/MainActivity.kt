@@ -1,6 +1,8 @@
 package org.thepacket.meshcore.app
 
 import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -8,7 +10,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.thepacket.meshcore.app.ui.ConnectScreen
@@ -26,12 +31,49 @@ class MainActivity : ComponentActivity() {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
+    /** Conversation (id, title) to open from a tapped message notification; consumed once. */
+    private val pendingConversation = mutableStateOf<Pair<String, String>?>(null)
+
+    private val notifPermLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* best-effort */ }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        readNotificationIntent(intent)
+    }
+
+    private fun readNotificationIntent(intent: Intent?) {
+        val id = intent?.getStringExtra(MeshConnectionService.EXTRA_CONVERSATION_ID) ?: return
+        val title = intent.getStringExtra(MeshConnectionService.EXTRA_CONVERSATION_TITLE) ?: id
+        pendingConversation.value = id to title
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        readNotificationIntent(intent)
+
+        // Ask for notification permission (Android 13+) so background messages can be shown.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         setContent {
             val vm: ConnectionViewModel = viewModel()
+
+            // Navigate to a conversation when launched from a message notification.
+            val pending by pendingConversation
+            LaunchedEffect(pending) {
+                pending?.let { (id, title) ->
+                    vm.openConversation(id, title)
+                    pendingConversation.value = null
+                }
+            }
+
             val state by vm.ui.collectAsStateWithLifecycle()
             val self by vm.session.self.collectAsStateWithLifecycle()
             val channels by vm.session.channels.collectAsStateWithLifecycle()

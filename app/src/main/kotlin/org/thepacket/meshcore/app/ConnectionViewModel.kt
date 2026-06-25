@@ -1,6 +1,8 @@
 package org.thepacket.meshcore.app
 
 import android.app.Application
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -10,9 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.thepacket.meshcore.ble.CompanionScanner
 import org.thepacket.meshcore.ble.LinkState
-import org.thepacket.meshcore.ble.NordicMeshCoreLink
 import org.thepacket.meshcore.ble.ScannedDevice
 
 /** Which screen the UI is showing. */
@@ -37,9 +37,12 @@ data class UiState(
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val scanner = CompanionScanner(app)
-    private val link = NordicMeshCoreLink(app)
-    val session = MeshSession(link, viewModelScope, ChatStore(app))
+    init { MeshConnection.init(app) }
+
+    // The link + session are process-scoped (survive Activity recreation, run in the service).
+    private val scanner get() = MeshConnection.scanner
+    private val link get() = MeshConnection.link
+    val session get() = MeshConnection.session
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -99,6 +102,7 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 link.connect(d.device)
+                startConnectionService() // keep the link alive in the background + notify
                 session.start() // APP_START handshake -> self info -> contacts sync
             } catch (e: CancellationException) {
                 throw e
@@ -109,9 +113,20 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
+        stopConnectionService()
         viewModelScope.launch { runCatching { link.disconnect() } }
         session.reset()
         _ui.update { it.copy(screen = Screen.Connect) }
+    }
+
+    private fun startConnectionService() {
+        val app = getApplication<Application>()
+        ContextCompat.startForegroundService(app, Intent(app, MeshConnectionService::class.java))
+    }
+
+    private fun stopConnectionService() {
+        val app = getApplication<Application>()
+        app.stopService(Intent(app, MeshConnectionService::class.java))
     }
 
     /** Route a send by conversation id: "ch:N" → channel, else → the matching contact DM. */

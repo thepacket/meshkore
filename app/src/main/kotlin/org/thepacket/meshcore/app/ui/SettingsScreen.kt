@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.app.NotifyPrefs
 import org.thepacket.meshcore.protocol.AutoAdd
 import org.thepacket.meshcore.protocol.SelfInfo
 
@@ -129,6 +130,20 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         SectionCard("Identity") {
             Field("Node name", name) { name = it }
             SaveRow { session.applyNodeName(name) }
+        }
+
+        // ---- Notifications ----
+        val notifyPrefs = remember { NotifyPrefs(ctx) }
+        var notifyDirect by remember { mutableStateOf(notifyPrefs.notifyDirect) }
+        var notifyChannels by remember { mutableStateOf(notifyPrefs.notifyChannels) }
+        SectionCard("Notifications") {
+            Text(
+                "Show a notification for messages received while the app is in the background.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            SwitchRow("Direct messages", notifyDirect) { notifyDirect = it; notifyPrefs.notifyDirect = it }
+            SwitchRow("Channel messages", notifyChannels) { notifyChannels = it; notifyPrefs.notifyChannels = it }
         }
 
         // ---- Radio ----
