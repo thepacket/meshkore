@@ -13,16 +13,21 @@ The app has seven tabs — **Chats · Heard · Packets · Stats · Map · Tools 
 - **Messaging (Chats)** — split into **Contacts** and **Channels** sub-tabs. Group
   **channels** and **direct messages** with speech-bubble threads, per-name colours,
   inbound SNR, and outbound **delivery status** (sending → sent → delivered ✓, via the
-  ACK path). Conversations are **persisted** locally across reconnects/restarts.
+  ACK path). DM/channel conversations are **persisted** locally across reconnects/restarts,
+  and **background notifications** alert you to new messages while the app is closed (toggle
+  per-type in Settings). The contact list has a **search** box.
   - **Contact management** — long-press a contact for **Share**, **Reset path**,
     **Export**, **Remove**, and **Request telemetry** (the battery/sensor data the
     node chooses to share); **import** a contact from an exported card.
   - **Channel management** — **create**, **edit** (name + 128-bit key, with a randomize
     button) and **delete** channels, with guards that prevent silently overwriting an
     existing slot (e.g. the Public channel).
-  - **Repeater / room management** — long-press a repeater or room contact to **log in**,
-    view its **live status** (battery, uptime, packet counts, airtime, signal, dups,
-    errors), and run **admin / CLI commands** with the responses shown in a console.
+  - **Room servers** — open a room contact to read and post to its **shared board**;
+    **log in** (blank password for public rooms) so the room delivers posts, each shown
+    with its **author**. (Room history lives on the server, not locally.)
+  - **Repeater management** — tap a repeater to **log in** and view its **live status**
+    (battery, uptime, packet counts, airtime, signal, dups, errors), **owner/firmware**,
+    **neighbours** and **access list**, and run **admin / CLI commands** in a console.
 - **Heard** — recently-heard stations with a signal-graded dot, SNR/RSSI, age, and
   distance (when both ends advertise GPS); tap for full details.
 - **Packet monitor** — live decoded RX feed (source/destination, payload/route type,
@@ -54,10 +59,11 @@ The app has seven tabs — **Chats · Heard · Packets · Stats · Map · Tools 
 The only runtime permissions requested are Bluetooth (and, on Android ≤ 11,
 location, which the OS requires for BLE scanning).
 
-> **Not yet implemented:** dedicated support for **Room Server** and **Sensor**
-> nodes. They're discovered and shown on the map and in lists, but room-server
-> features (shared message board, member list) and sensor features (environmental
-> readings, telemetry history) are still to come.
+> **Not yet implemented:** dedicated support for **Sensor** nodes (environmental
+> readings / telemetry history) and a room **member-list** view. **Room servers**
+> are supported — log in, then read and post to the shared board, with per-post
+> authors. Note that a room server needs a correct clock (an RTC, or a clock set
+> via its CLI) to relay posts between members.
 
 ## Status
 
@@ -66,14 +72,16 @@ location, which the OS requires for BLE scanning).
 | Connect + device config (full editable settings) | ✅ done, hardware-validated |
 | BLE PIN / passkey pairing (MITM companions) | ✅ done, hardware-validated |
 | Messaging (DMs + channels + delivery status + persistence) | ✅ done, hardware-validated |
-| Contact management (share / reset-path / remove / export-import) | ✅ done, hardware-validated |
+| Background message notifications | ✅ done, hardware-validated |
+| Contact management (search / share / reset-path / remove / export-import) | ✅ done, hardware-validated |
 | Channel management (create / edit / delete) | ✅ done, hardware-validated |
 | Instrumentation (packet monitor / noise / stats / telemetry) | ✅ done, hardware-validated |
 | Remote telemetry (request a contact's telemetry) | ✅ done, hardware-validated |
 | Last-heard | ✅ done, hardware-validated |
 | Map (node positions) | ✅ done, hardware-validated |
 | Tools — trace path (on map) + node discovery + advertise | ✅ done, hardware-validated |
-| Repeater / room management (remote login / status / CLI commands) | ✅ done, hardware-validated |
+| Repeater management (remote login / status / owner / neighbours / ACL / CLI) | ✅ done, hardware-validated |
+| Room servers (log in, read + post the shared board, per-post authors) | ✅ done, hardware-validated |
 
 ## Module layout
 
