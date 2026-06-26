@@ -18,12 +18,15 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Campaign
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -107,6 +110,7 @@ private fun ContactsList(
     var detail by remember { mutableStateOf<Contact?>(null) }
     var manage by remember { mutableStateOf<Contact?>(null) }
     var showImport by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
@@ -121,18 +125,27 @@ private fun ContactsList(
         contacts.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
     }
 
+    // Filter by the search query against display name and key prefix.
+    val filtered = remember(sorted, query) {
+        val q = query.trim()
+        if (q.isEmpty()) sorted
+        else sorted.filter {
+            it.name.contains(q, ignoreCase = true) || it.keyPrefixHex.contains(q, ignoreCase = true)
+        }
+    }
+
     // After an import, the list is rebuilt and LazyColumn keeps its scroll anchor, so a
     // newly-added row can land off-screen. Scroll to the imported contact once it appears
     // in the (possibly not-yet-recomposed) sorted list.
-    val sortedState = rememberUpdatedState(sorted)
+    val filteredState = rememberUpdatedState(filtered)
     LaunchedEffect(session) {
         session.importedContact.collect { key ->
             // Wait until the imported row is present in the data, then let the rebuilt list
             // fully settle before scrolling — scrolling mid-rebuild uses stale measurements
             // and the LazyColumn re-anchors to the previously-first key, hiding the new row.
-            snapshotFlow { sortedState.value.indexOfFirst { it.keyPrefixHex == key } }.first { it >= 0 }
+            snapshotFlow { filteredState.value.indexOfFirst { it.keyPrefixHex == key } }.first { it >= 0 }
             delay(350)
-            val idx = sortedState.value.indexOfFirst { it.keyPrefixHex == key }
+            val idx = filteredState.value.indexOfFirst { it.keyPrefixHex == key }
             if (idx >= 0) listState.animateScrollToItem(idx)
         }
     }
@@ -143,8 +156,27 @@ private fun ContactsList(
                 Text("  Import contact")
             }
         }
-        if (sorted.isEmpty()) {
+        if (contacts.isNotEmpty()) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                placeholder = { Text("Search contacts") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear search")
+                        }
+                    }
+                },
+                singleLine = true,
+            )
+        }
+        if (contacts.isEmpty()) {
             EmptyHint("No contacts synced yet.")
+        } else if (filtered.isEmpty()) {
+            EmptyHint("No contacts match \"$query\".")
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -152,13 +184,17 @@ private fun ContactsList(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(sorted, key = { it.keyPrefixHex }) { c ->
+                items(filtered, key = { it.keyPrefixHex }) { c ->
                     ConversationRow(
                         icon = if (c.isRepeater) Icons.Default.Router else Icons.Default.Person,
                         tint = nameColor(c.name.ifBlank { c.keyPrefixHex }),
                         title = c.name.ifBlank { c.keyPrefixHex },
                         subtitle = contactTypeLabel(c.type),
-                        onClick = { onOpen(Conversation.dmId(c), c.name.ifBlank { c.keyPrefixHex }) },
+                        // A repeater isn't a chat target — tap opens its management screen instead.
+                        onClick = {
+                            if (c.type == ContactType.REPEATER) manage = c
+                            else onOpen(Conversation.dmId(c), c.name.ifBlank { c.keyPrefixHex })
+                        },
                         onLongClick = { detail = c },
                     )
                 }
