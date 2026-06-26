@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
             val packetStats by vm.session.packetStats.collectAsStateWithLifecycle()
             val noise by vm.session.noiseHistory.collectAsStateWithLifecycle()
             val telemetry by vm.session.telemetry.collectAsStateWithLifecycle()
+            val repeaters by vm.session.repeaters.collectAsStateWithLifecycle()
 
             val permLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
@@ -117,12 +118,26 @@ class MainActivity : ComponentActivity() {
                         telemetry = telemetry,
                         onOpenConversation = vm::openConversation,
                     )
-                    is Screen.Conversation -> ConversationScreen(
-                        title = screen.title,
-                        messages = messages[screen.conversationId].orEmpty(),
-                        onBack = vm::backToHome,
-                        onSend = { text -> vm.sendMessage(screen.conversationId, text) },
-                    )
+                    is Screen.Conversation -> {
+                        // A room-server conversation gets a login banner + per-post authors.
+                        val roomContact = contacts.firstOrNull {
+                            it.type == org.thepacket.meshcore.protocol.ContactType.ROOM &&
+                                Conversation.dmId(it) == screen.conversationId
+                        }
+                        ConversationScreen(
+                            title = screen.title,
+                            messages = messages[screen.conversationId].orEmpty(),
+                            contacts = contacts,
+                            heard = heard,
+                            self = self,
+                            roomLogin = roomContact?.let {
+                                repeaters[screen.conversationId]?.login ?: RepeaterLogin.None
+                            },
+                            onBack = vm::backToHome,
+                            onSend = { text -> vm.sendMessage(screen.conversationId, text) },
+                            onLogin = { pw -> roomContact?.let { vm.session.loginRepeater(it, pw) } },
+                        )
+                    }
                 }
             }
         }

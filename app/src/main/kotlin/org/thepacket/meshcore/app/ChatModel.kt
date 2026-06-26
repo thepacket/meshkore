@@ -56,6 +56,8 @@ data class ChatMessage(
     val status: MsgStatus,
     val snrDb: Double? = null,
     val expectedAck: Long = 0,
+    /** For room-server posts: hex of the author's 4-byte key prefix (null for normal DMs/channels). */
+    val authorPrefix: String? = null,
 )
 
 /**

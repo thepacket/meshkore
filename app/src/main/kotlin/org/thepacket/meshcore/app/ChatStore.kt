@@ -36,6 +36,7 @@ class ChatStore(private val file: File) {
                                     .getOrDefault(MsgStatus.Received),
                                 snrDb = if (o.has("snr") && !o.isNull("snr")) o.getDouble("snr") else null,
                                 expectedAck = o.optLong("ack", 0),
+                                authorPrefix = if (o.has("auth") && !o.isNull("auth")) o.getString("auth") else null,
                             )
                         )
                     }
@@ -61,6 +62,7 @@ class ChatStore(private val file: File) {
                         put("st", m.status.name)
                         m.snrDb?.let { put("snr", it) }
                         if (m.expectedAck != 0L) put("ack", m.expectedAck)
+                        m.authorPrefix?.let { put("auth", it) }
                     })
                 }
                 root.put(key, arr)

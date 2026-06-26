@@ -678,6 +678,13 @@ class MeshSession(
             is Incoming.ContactsEnd -> {
                 _contacts.value = contactAccumulator.sortedByDescending { it.lastAdvert }
                 contactAccumulator.clear()
+                // Drop any locally-stored room history: rooms are server-owned, so we show only
+                // what the room delivers this session. (Room posts arrive later, after login.)
+                val rooms = roomConvIds()
+                if (_messages.value.keys.any { it in rooms }) {
+                    _messages.update { it - rooms }
+                    scheduleSave()
+                }
                 startChannelEnumeration() // then drains messages when done
             }
 
@@ -852,6 +859,7 @@ class MeshSession(
             incoming = true,
             status = MsgStatus.Received,
             snrDb = if (m.snrQ != 0) m.snrDb else null,
+            authorPrefix = m.signerPrefix.takeIf { it.isNotEmpty() }?.toHex(),
         )
         appendMessage(msg)
         _incomingMessages.tryEmit(msg)
@@ -911,13 +919,19 @@ class MeshSession(
         scheduleSave()
     }
 
+    /** Conversation ids that belong to room servers — the room owns that history, so we
+     *  never persist it locally (it is re-synced from the room on each connection). */
+    private fun roomConvIds(): Set<String> =
+        _contacts.value.filter { it.type == ContactType.ROOM }.map { Conversation.dmId(it) }.toSet()
+
     /** Persist chat history shortly after a change (debounced to coalesce bursts). */
     private fun scheduleSave() {
         val store = chatStore ?: return
         saveJob?.cancel()
         saveJob = scope.launch {
             delay(400)
-            store.save(_messages.value)
+            val rooms = roomConvIds()
+            store.save(_messages.value.filterKeys { it !in rooms })
         }
     }
 }

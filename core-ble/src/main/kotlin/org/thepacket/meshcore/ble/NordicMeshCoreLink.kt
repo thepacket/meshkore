@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.data.Data
@@ -53,6 +54,9 @@ class NordicMeshCoreLink(context: Context) : MeshCoreLink {
         if (device.bondState != BluetoothDevice.BOND_BONDED) {
             _state.value = LinkState.Bonding
             bond(device)
+            // After a fresh bond the nRF52 finishes re-encrypting the link; connecting
+            // immediately tends to fail with status=133 (GATT_ERROR). Let it settle.
+            delay(600)
         }
         gattConnect(device)
     }
@@ -98,10 +102,13 @@ class NordicMeshCoreLink(context: Context) : MeshCoreLink {
 
     private suspend fun gattConnect(device: BluetoothDevice): Unit = suspendCancellableCoroutine { cont ->
         _state.value = LinkState.Connecting
+        // status=133 (GATT_ERROR) is Android's generic, usually-transient connect failure;
+        // Nordic closes and reopens the GATT client between attempts, so a few retries with
+        // a longer back-off clears most of them.
         manager.connect(device)
-            .retry(3, 200)
+            .retry(4, 600)
             .useAutoConnect(false)
-            .timeout(15_000)
+            .timeout(20_000)
             .done {
                 _state.value = LinkState.Connected
                 if (cont.isActive) cont.resume(Unit)

@@ -349,9 +349,10 @@ object FrameDecoder {
             val pathLen = r.u8()
             val txtType = r.u8()
             val ts = r.u32()
-            if (txtType == TxtType.SIGNED_PLAIN && r.remaining >= 4) r.bytes(4) // signer prefix (extra)
+            // SIGNED_PLAIN (room posts) carry the author's 4-byte key prefix before the text.
+            val signer = if (txtType == TxtType.SIGNED_PLAIN && r.remaining >= 4) r.bytes(4) else ByteArray(0)
             IncomingMessage(prefix, pathLen, txtType, ts, r.restAsString(),
-                isChannel = false, snrQ = snrQ)
+                isChannel = false, snrQ = snrQ, signerPrefix = signer)
         }
     }
 

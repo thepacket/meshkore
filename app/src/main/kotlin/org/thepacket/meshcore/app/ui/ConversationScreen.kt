@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,13 +20,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Login
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,20 +44,45 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.thepacket.meshcore.app.ChatMessage
+import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.app.MsgStatus
+import org.thepacket.meshcore.app.RepeaterLogin
+import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.SelfInfo
+import org.thepacket.meshcore.protocol.toHex
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationScreen(
     title: String,
     messages: List<ChatMessage>,
+    contacts: List<Contact>,
+    heard: List<HeardEntry>,
+    self: SelfInfo?,
+    /** Non-null when this conversation is a room server: its current login state. */
+    roomLogin: RepeaterLogin?,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
+    onLogin: (password: String) -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+
+    // Resolve a room post's author (4-byte key prefix, hex) to a friendly name. Room members
+    // are rarely in Contacts, so fall back to the Heard list (advert names) before raw hex.
+    val authorName: (String) -> String = remember(contacts, heard, self) {
+        { prefixHex ->
+            if (self != null && self.publicKey.copyOf(4).toHex() == prefixHex) "You"
+            else contacts.firstOrNull { it.publicKey.copyOf(4).toHex() == prefixHex }
+                ?.let { it.name.ifBlank { it.keyPrefixHex } }
+                ?: heard.firstOrNull { it.pubKeyHex.startsWith(prefixHex) }
+                    ?.name?.takeIf { it.isNotBlank() }
+                ?: prefixHex
+        }
+    }
 
     // Keep the newest message visible — on a new message AND when the keyboard opens
     // (edge-to-edge means the IME overlays content, so we must re-scroll past it).
@@ -59,6 +90,8 @@ fun ConversationScreen(
     LaunchedEffect(messages.size, imeVisible) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
+
+    var showLoginDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -69,18 +102,50 @@ fun ConversationScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = {
+                    // Room login is optional: the room remembers you after the first login, so this
+                    // is mainly for first-time registration, re-syncing history, or admin access.
+                    when (roomLogin) {
+                        null -> {}
+                        RepeaterLogin.LoggingIn ->
+                            CircularProgressIndicator(Modifier.padding(end = 12.dp).size(20.dp), strokeWidth = 2.dp)
+                        RepeaterLogin.LoggedIn ->
+                            Text(
+                                "Authorized",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(end = 12.dp),
+                            )
+                        else ->
+                            IconButton(onClick = { showLoginDialog = true }) {
+                                Icon(Icons.Filled.Login, contentDescription = "Log in to room")
+                            }
+                    }
+                },
             )
         },
     ) { pad ->
         // imePadding lifts the compose bar (and list) above the keyboard.
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+            if (roomLogin == RepeaterLogin.Failed) {
+                Surface(color = MaterialTheme.colorScheme.errorContainer, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Room login failed — wrong password or no reply.",
+                        Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(messages, key = { it.localId }) { MessageBubble(it) }
+                items(messages, key = { it.localId }) {
+                    MessageBubble(it, it.authorPrefix?.let(authorName))
+                }
             }
             ComposeBar(
                 draft = draft,
@@ -92,10 +157,18 @@ fun ConversationScreen(
             )
         }
     }
+
+    if (showLoginDialog) {
+        RoomLoginDialog(
+            loggedIn = roomLogin == RepeaterLogin.LoggedIn,
+            onDismiss = { showLoginDialog = false },
+            onLogin = onLogin,
+        )
+    }
 }
 
 @Composable
-private fun MessageBubble(m: ChatMessage) {
+private fun MessageBubble(m: ChatMessage, author: String?) {
     val align = if (m.incoming) Alignment.CenterStart else Alignment.CenterEnd
     val bubble = if (m.incoming) MaterialTheme.colorScheme.surfaceVariant
     else MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
@@ -107,6 +180,11 @@ private fun MessageBubble(m: ChatMessage) {
                 .background(bubble, RoundedCornerShape(14.dp))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
+            // Room posts: who wrote it (the conversation is the room, the author is the signer).
+            if (author != null) {
+                Text(author, style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            }
             Text(m.text, style = MaterialTheme.typography.bodyLarge)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (m.incoming && m.snrDb != null) {
@@ -120,6 +198,32 @@ private fun MessageBubble(m: ChatMessage) {
             }
         }
     }
+}
+
+@Composable
+private fun RoomLoginDialog(loggedIn: Boolean, onDismiss: () -> Unit, onLogin: (String) -> Unit) {
+    var password by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (loggedIn) "Re-sync room" else "Log in to room") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "The room remembers you after the first login. Logging in again re-syncs " +
+                        "history or signs you in as admin.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+                OutlinedTextField(
+                    value = password, onValueChange = { password = it },
+                    label = { Text("Password (blank for public)") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onDismiss(); onLogin(password) }) { Text("Log in") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
