@@ -121,6 +121,7 @@ private fun ContactsList(
     var showImport by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
+    val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     // Repeater/room management takes over the whole pane when open.
@@ -220,6 +221,8 @@ private fun ContactsList(
                 { manage = c; detail = null }
             } else null,
             onShowOnMap = onShowOnMap,
+            onDiscoverPath = { session.discoverPath(c.publicKey) },
+            pathResult = pathDiscovery[c.keyPrefixHex],
         )
     }
 

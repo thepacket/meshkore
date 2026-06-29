@@ -117,8 +117,8 @@ fun MainScaffold(
         val m = Modifier.padding(pad)
         when (tab) {
             MainTab.Chats -> HomeContent(session, self, channels, contacts, onOpenConversation, m, onShowOnMap)
-            MainTab.Heard -> HeardContent(heard, contacts, self, m, onShowOnMap)
-            MainTab.Packets -> PacketMonitorContent(packets, contacts, self, m, onShowOnMap)
+            MainTab.Heard -> HeardContent(heard, contacts, self, session, m, onShowOnMap)
+            MainTab.Packets -> PacketMonitorContent(packets, contacts, self, session, m, onShowOnMap)
             MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, telemetry, session::refreshTelemetry, m)
             MainTab.Map -> MapContent(self, contacts, heard, m, focus = mapFocus, onFocusConsumed = onMapFocusConsumed)
             MainTab.Tools -> ToolsContent(session, self, m, onShowOnMap)

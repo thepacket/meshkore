@@ -74,6 +74,7 @@ sealed interface Incoming {
         override fun hashCode() = pubKeyPrefix.contentHashCode() * 31 + stats.hashCode()
     }
     data class Trace(val result: TraceResult) : Incoming
+    data class PathDiscovery(val result: PathDiscoveryResult) : Incoming
     data class RxPacket(val log: RxLog) : Incoming
     data class NodeDiscovered(val node: DiscoveredNode) : Incoming
     /** PUSH_CODE_BINARY_RESPONSE — a tagged reply to a CMD_SEND_BINARY_REQ; [data] is type-specific. */
@@ -224,6 +225,7 @@ object FrameDecoder {
                     Incoming.Status(prefix, parseRepeaterStats(r))
                 }
                 Push.TRACE_DATA -> Incoming.Trace(parseTrace(r))
+                Push.PATH_DISCOVERY_RESPONSE -> Incoming.PathDiscovery(parsePathDiscovery(r))
                 Push.LOG_RX_DATA -> Incoming.RxPacket(parseRxLog(r))
                 Push.TELEMETRY_RESPONSE -> {
                     r.u8() // reserved
@@ -432,6 +434,19 @@ object FrameDecoder {
             TraceHop(hashes[idx].toInt() and 0xFF, if (si < snrs.size) snrs[si].toInt() else 0)
         }
         return TraceResult(tag, hops, finalSnr)
+    }
+
+    // PUSH_CODE_PATH_DISCOVERY_RESPONSE (confirmed vs MyMesh::onContactPathRecv):
+    //   reserved(1) pubKeyPrefix(6) outPathLen(1) outPath(outPathLen) inPathLen(1) inPath(inPathLen)
+    // Each path byte is a 1-byte hop hash (a contact's first public-key byte).
+    private fun parsePathDiscovery(r: FrameReader): PathDiscoveryResult {
+        r.u8() // reserved
+        val prefix = r.bytes(minOf(6, r.remaining))
+        val outLen = if (r.remaining > 0) r.u8() else 0
+        val outPath = r.bytes(minOf(outLen, r.remaining)).map { it.toInt() and 0xFF }
+        val inLen = if (r.remaining > 0) r.u8() else 0
+        val inPath = r.bytes(minOf(inLen, r.remaining)).map { it.toInt() and 0xFF }
+        return PathDiscoveryResult(prefix, outPath, inPath)
     }
 
     // PUSH_CODE_LOG_RX_DATA: snrQ(i8) rssi(i8) raw(rest). Payload/route type is in raw[0].

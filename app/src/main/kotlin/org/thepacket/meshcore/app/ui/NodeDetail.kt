@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.Lpp
+import org.thepacket.meshcore.protocol.PathDiscoveryResult
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.toHex
 import java.text.SimpleDateFormat
@@ -68,6 +70,9 @@ fun NodeDetailSheet(
     onManage: (() -> Unit)? = null,
     /** Shown (with the node's coordinates) only when the node has a known position. */
     onShowOnMap: ((lat: Double, lon: Double) -> Unit)? = null,
+    /** "Get path to node": triggers route discovery; [pathResult] holds the latest reply. */
+    onDiscoverPath: (() -> Unit)? = null,
+    pathResult: PathDiscoveryResult? = null,
 ) {
     val coords: Pair<Double, Double>? = when {
         isSelf && self != null && (self.advLat != 0 || self.advLon != 0) -> self.advLat / 1e6 to self.advLon / 1e6
@@ -146,6 +151,11 @@ fun NodeDetailSheet(
                     }
                 }
 
+                if (onDiscoverPath != null) {
+                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                    PathSection(pathResult, onDiscoverPath)
+                }
+
                 if (onRequestTelemetry != null) {
                     HorizontalDivider(Modifier.padding(vertical = 6.dp))
                     TelemetrySection(telemetry, onRequestTelemetry)
@@ -159,6 +169,53 @@ fun NodeDetailSheet(
         }
     }
 }
+
+/**
+ * "Get path to node" control + result, shared by the node sheet and the packet dialog.
+ * [hopName] resolves a 1-byte hop hash to a display name (defaults to hex).
+ */
+@Composable
+internal fun PathSection(
+    result: PathDiscoveryResult?,
+    onDiscover: () -> Unit,
+    hopName: (Int) -> String = { "0x%02X".format(it) },
+) {
+    var pending by remember { mutableStateOf(false) }
+    var timedOut by remember { mutableStateOf(false) }
+    var reqId by remember { mutableStateOf(0) }
+    // A new result clears pending; otherwise time out (the node never answered the flood request).
+    LaunchedEffect(result) { if (result != null) { pending = false; timedOut = false } }
+    LaunchedEffect(reqId) {
+        if (reqId > 0) { kotlinx.coroutines.delay(45_000); if (pending) { pending = false; timedOut = true } }
+    }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Path to node", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        OutlinedButton(
+            enabled = !pending,
+            onClick = { pending = true; timedOut = false; reqId++; onDiscover() },
+        ) {
+            Text(if (pending) "Requesting…" else if (result == null) "Get path" else "Refresh")
+        }
+    }
+    when {
+        pending -> kvHint("Requesting route… waiting for the node to reply (this can take a while).")
+        timedOut -> kvHint("No response — the node may be offline, out of range, or not answering.")
+        result == null -> kvHint("Tap Get path to ask the device for the route to this node.")
+        else -> {
+            kvRow("Outbound", pathLabel(result.outPath, hopName))
+            kvRow("Return", pathLabel(result.inPath, hopName))
+        }
+    }
+}
+
+private fun pathLabel(path: List<Int>, hopName: (Int) -> String): String =
+    if (path.isEmpty()) "direct (0 hops)"
+    else "${path.size} hop(s): " + path.joinToString(" → ", transform = hopName)
 
 @Composable
 private fun TelemetrySection(telemetry: List<Lpp.Reading>?, onRequest: () -> Unit) {

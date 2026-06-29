@@ -42,6 +42,7 @@ import org.thepacket.meshcore.protocol.Requests
 import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.StatsType
+import org.thepacket.meshcore.protocol.PathDiscoveryResult
 import org.thepacket.meshcore.protocol.TraceResult
 import org.thepacket.meshcore.protocol.TuningParams
 import java.util.ArrayDeque
@@ -159,6 +160,10 @@ class MeshSession(
     private val _traceResult = MutableStateFlow<TraceResult?>(null)
     val traceResult: StateFlow<TraceResult?> = _traceResult.asStateFlow()
 
+    /** Discovered routes per node, keyed by 6-byte key-prefix hex (from "Get path to node"). */
+    private val _pathDiscovery = MutableStateFlow<Map<String, PathDiscoveryResult>>(emptyMap())
+    val pathDiscovery: StateFlow<Map<String, PathDiscoveryResult>> = _pathDiscovery.asStateFlow()
+
     /** Emitted after each settings write (OK/ERR) for UI feedback. */
     private val _settingsResult = MutableSharedFlow<SettingsResult>(extraBufferCapacity = 8)
     val settingsResult: SharedFlow<SettingsResult> = _settingsResult.asSharedFlow()
@@ -227,6 +232,20 @@ class MeshSession(
      */
     fun requestTelemetry(contact: Contact) =
         scope.launch { runCatching { link.send(Requests.requestTelemetry(contact.publicKey)) } }.let {}
+
+    /**
+     * Ask the device to discover the route to [pubKey] (the node's full 32-byte public key).
+     * The device replies SENT immediately; the route arrives later (or not, if unreachable) via
+     * PUSH_CODE_PATH_DISCOVERY_RESPONSE and lands in [pathDiscovery] keyed by 6-byte prefix hex.
+     */
+    fun discoverPath(pubKey: ByteArray) {
+        if (pubKey.size < 32) return
+        dbg("tx pathDiscovery key=${pubKey.copyOf(6).toHex()}")
+        scope.launch {
+            runCatching { link.send(Requests.sendPathDiscoveryReq(pubKey)) }
+                .onFailure { dbg("tx pathDiscovery FAILED: ${it.message}") }
+        }
+    }
 
     /** Trace a path through the given ordered hop hashes (each = a node's public-key prefix byte). */
     fun sendTrace(path: ByteArray) {
@@ -364,6 +383,7 @@ class MeshSession(
         _noiseHistory.value = emptyList()
         _heard.value = emptyList()
         _discovered.value = emptyList()
+        _pathDiscovery.value = emptyMap()
         discoverTag = 0L
         _repeaters.value = emptyMap()
         pendingBinaryReq = null
@@ -667,7 +687,12 @@ class MeshSession(
     // ---- incoming frames --------------------------------------------------
 
     private fun onFrame(f: Incoming) {
-        dbg("rx ${f::class.simpleName}")
+        dbg(when (f) {
+            is Incoming.Raw -> "rx Raw code=0x%02X len=${f.payload.size} %s".format(f.code, f.payload.toHex())
+            is Incoming.PathDiscovery ->
+                "rx PathDiscovery key=${f.result.keyPrefixHex} out=${f.result.outPath} in=${f.result.inPath}"
+            else -> "rx ${f::class.simpleName}"
+        })
         when (f) {
             is Incoming.Self -> {
                 _self.value = f.info
@@ -756,6 +781,7 @@ class MeshSession(
                 }
             }
             is Incoming.Trace -> _traceResult.value = f.result
+            is Incoming.PathDiscovery -> _pathDiscovery.update { it + (f.result.keyPrefixHex to f.result) }
             is Incoming.NodeDiscovered -> if (f.node.tag == discoverTag) {
                 // Replace any prior entry for this node so its SNR refreshes; no duplicates.
                 _discovered.update { list ->

@@ -184,6 +184,20 @@ object Requests {
             .build()
     }
 
+    /**
+     * CMD_SEND_PATH_DISCOVERY_REQ — ask the device to discover the route to a contact.
+     * Layout: [cmd, reserved=0, dest pub_key(32)]. The result arrives as
+     * PUSH_CODE_PATH_DISCOVERY_RESPONSE. Verified against MyMesh.cpp `handleCmdFrame`.
+     */
+    fun sendPathDiscoveryReq(pubKey: ByteArray): ByteArray {
+        require(pubKey.size >= 32) { "pubKey must be the full 32 bytes" }
+        return FrameWriter()
+            .u8(Cmd.SEND_PATH_DISCOVERY_REQ)
+            .u8(0) // reserved
+            .bytes(pubKey.copyOf(32))
+            .build()
+    }
+
     /** Auto-add config: [AutoAdd] flag bitmask + max hops (0 = unlimited). */
     fun setAutoAddConfig(flags: Int, maxHops: Int): ByteArray =
         FrameWriter().u8(Cmd.SET_AUTOADD_CONFIG).u8(flags).u8(maxHops).build()

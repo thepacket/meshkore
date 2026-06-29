@@ -248,6 +248,7 @@ private fun DiscoverTool(
     val contacts by session.contacts.collectAsStateWithLifecycle()
     val heard by session.heard.collectAsStateWithLifecycle()
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
+    val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<DiscoveredNode?>(null) }
     var autoRefresh by remember { mutableStateOf(false) }
 
@@ -320,6 +321,8 @@ private fun DiscoverTool(
             onRequestTelemetry = c?.let { { session.requestTelemetry(it) } },
             telemetry = c?.let { contactTelemetry[it.keyPrefixHex] },
             onShowOnMap = onShowOnMap,
+            onDiscoverPath = { session.discoverPath(n.pubKey) },
+            pathResult = pathDiscovery[n.keyPrefixHex],
         )
     }
 }

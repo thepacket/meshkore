@@ -29,10 +29,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.HeardEntry
+import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.SelfInfo
+import org.thepacket.meshcore.protocol.hexToBytes
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,9 +45,11 @@ fun HeardContent(
     heard: List<HeardEntry>,
     contacts: List<Contact>,
     self: SelfInfo?,
+    session: MeshSession,
     modifier: Modifier = Modifier,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
 ) {
+    val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     if (heard.isEmpty()) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No stations heard yet…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
@@ -76,6 +81,8 @@ fun HeardContent(
             self = self,
             onDismiss = { selected = null },
             onShowOnMap = onShowOnMap,
+            onDiscoverPath = { session.discoverPath(contact?.publicKey ?: h.pubKeyHex.hexToBytes()) },
+            pathResult = pathDiscovery[contact?.keyPrefixHex ?: h.pubKeyHex.take(12)],
         )
     }
 }

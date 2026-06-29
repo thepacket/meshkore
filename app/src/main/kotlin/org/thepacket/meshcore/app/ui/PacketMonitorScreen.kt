@@ -30,10 +30,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.ParsedPacket
+import org.thepacket.meshcore.protocol.PathDiscoveryResult
 import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.SelfInfo
@@ -47,10 +50,12 @@ fun PacketMonitorContent(
     packets: List<RxLog>,
     contacts: List<Contact>,
     self: SelfInfo?,
+    session: MeshSession,
     modifier: Modifier = Modifier,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
 ) {
     var detail by remember { mutableStateOf<RxLog?>(null) }
+    val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
 
     if (packets.isEmpty()) {
         Box(modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
@@ -70,8 +75,23 @@ fun PacketMonitorContent(
 
     detail?.let { log ->
         val parsed = remember(log) { PacketInspector.parse(log.raw) }
-        PacketDetailDialog(log, parsed, contacts, self, onShowOnMap) { detail = null }
+        val srcKey = sourcePubKey(parsed, contacts)
+        PacketDetailDialog(
+            log, parsed, contacts, self, onShowOnMap,
+            pathResult = srcKey?.let { pathDiscovery[it.copyOf(6).toHex()] },
+            onDiscoverPath = srcKey?.let { key -> { session.discoverPath(key) } },
+        ) { detail = null }
     }
+}
+
+/** Full 32-byte public key of a packet's source, if recoverable (advert body, else src-hash contact). */
+private fun sourcePubKey(p: ParsedPacket, contacts: List<Contact>): ByteArray? {
+    p.advertPubKey?.let { if (it.size >= 32) return it.copyOf(32) }
+    p.srcHash?.let { hash ->
+        contacts.firstOrNull { it.publicKey.size >= 32 && (it.publicKey[0].toInt() and 0xFF) == hash }
+            ?.let { return it.publicKey }
+    }
+    return null
 }
 
 @Composable
@@ -81,6 +101,8 @@ private fun PacketDetailDialog(
     contacts: List<Contact>,
     self: SelfInfo?,
     onShowOnMap: (lat: Double, lon: Double) -> Unit,
+    pathResult: PathDiscoveryResult?,
+    onDiscoverPath: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     val srcPos = sourcePosition(p, contacts)
@@ -124,6 +146,11 @@ private fun PacketDetailDialog(
                     kv("SNR / RSSI", "${log.snrDb} dB / ${log.rssi} dBm")
                     kv("Length", "${log.length} B  (payload ${p.payloadLen} B)")
                     kv("Header", "0x%02X".format(p.header))
+
+                    if (onDiscoverPath != null) {
+                        PathSection(pathResult, onDiscoverPath) { hopLabel(it, contacts, self) }
+                    }
+
                     Text("Raw", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
                     Text(log.hex, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
                 }
