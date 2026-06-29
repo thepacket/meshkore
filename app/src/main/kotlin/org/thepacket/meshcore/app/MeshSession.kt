@@ -105,7 +105,10 @@ class MeshSession(
     /** Mark a conversation open (or null when leaving); opening also clears its unread count. */
     fun setActiveConversation(convId: String?) {
         activeConv = convId
-        if (convId != null && _unread.value.containsKey(convId)) _unread.update { it - convId }
+        if (convId != null && _unread.value.containsKey(convId)) {
+            _unread.update { it - convId }
+            chatStore?.saveUnread(_unread.value)
+        }
     }
 
     // ---- instrumentation (P2) ----
@@ -219,6 +222,7 @@ class MeshSession(
                 localIdSeq = saved.values.flatten().maxOfOrNull { it.localId } ?: 0L
             }
         }
+        chatStore?.loadUnread()?.let { if (it.isNotEmpty()) _unread.value = it }
         scope.launch { link.incoming.collect(::onFrame) }
     }
 
@@ -515,6 +519,7 @@ class MeshSession(
         _messages.value = emptyMap()
         _unread.value = emptyMap()
         chatStore?.save(emptyMap())
+        chatStore?.saveUnread(emptyMap())
         _heard.value = emptyList()
         _packets.value = emptyList()
     }
@@ -634,8 +639,9 @@ class MeshSession(
      * IMPORT_CONTACT; the next full sync reconciles any fields not carried by the advert.
      */
     fun importContact(hex: String) {
-        val bytes = runCatching { hex.trim().replace(" ", "").lowercase().hexToBytes() }
-            .getOrNull() ?: return
+        // Accept either raw card hex or the official "meshcore://<hex>" contact URL (QR/clipboard).
+        val cleaned = hex.trim().replace(" ", "").lowercase().removePrefix("meshcore://")
+        val bytes = runCatching { cleaned.hexToBytes() }.getOrNull() ?: return
         if (bytes.size <= 2 + 32 + 64) return // firmware requires a full advert card
         scope.launch { runCatching { link.send(Requests.importContact(bytes)) } }
 
@@ -662,6 +668,31 @@ class MeshSession(
     // ---- channel management ----------------------------------------------
 
     /** Create or replace a channel slot (optimistically reflect it locally). */
+    /** Restore slot 0 to the canonical MeshCore Public channel (name + well-known PSK). */
+    fun restorePublicChannel() =
+        setChannel(PublicChannel.INDEX, PublicChannel.NAME, PublicChannel.SECRET)
+
+    /**
+     * Add [items] (name → 16-byte secret) into free channel slots (1+, leaving Public alone).
+     * Skips entries whose key already exists, and stops when slots run out. Returns count added.
+     */
+    fun addChannels(items: List<Pair<String, ByteArray>>): Int {
+        val max = _deviceInfo.value?.maxChannels?.takeIf { it > 0 } ?: 8
+        val used = _channels.value.map { it.index }.toMutableSet()
+        val keys = _channels.value.mapNotNull { it.secret.takeIf { s -> s.size >= 16 }?.copyOf(16)?.toHex() }
+            .toMutableSet()
+        var added = 0
+        for ((name, secret) in items) {
+            val key = secret.copyOf(16)
+            if (key.toHex() in keys) continue
+            val slot = (1 until max).firstOrNull { it !in used } ?: break
+            used.add(slot); keys.add(key.toHex())
+            setChannel(slot, name, key)
+            added++
+        }
+        return added
+    }
+
     fun setChannel(index: Int, name: String, secret: ByteArray) {
         val key = secret.copyOf(16)
         val prev = _channels.value.firstOrNull { it.index == index }
@@ -920,7 +951,10 @@ class MeshSession(
             authorPrefix = m.signerPrefix.takeIf { it.isNotEmpty() }?.toHex(),
         )
         appendMessage(msg)
-        if (convId != activeConv) _unread.update { it + (convId to ((it[convId] ?: 0) + 1)) }
+        if (convId != activeConv) {
+            _unread.update { it + (convId to ((it[convId] ?: 0) + 1)) }
+            chatStore?.saveUnread(_unread.value)
+        }
         _incomingMessages.tryEmit(msg)
     }
 

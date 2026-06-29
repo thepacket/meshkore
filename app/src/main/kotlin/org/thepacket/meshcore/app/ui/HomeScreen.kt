@@ -17,7 +17,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.activity.compose.rememberLauncherForActivityResult
+import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.shape.CircleShape
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -29,6 +31,8 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -56,6 +60,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.font.FontFamily
@@ -65,6 +70,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.Conversation
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.app.PublicChannel
+import org.thepacket.meshcore.app.RegionChannels
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
@@ -241,7 +248,7 @@ private fun ContactsList(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ChannelsList(
     session: MeshSession,
@@ -250,21 +257,39 @@ private fun ChannelsList(
 ) {
     val deviceInfo by session.deviceInfo.collectAsStateWithLifecycle()
     val unread by session.unread.collectAsStateWithLifecycle()
+    val ctx = LocalContext.current
     var editing by remember { mutableStateOf<ChannelEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var addingRegion by remember { mutableStateOf(false) }
 
     val maxChannels = deviceInfo?.maxChannels?.takeIf { it > 0 } ?: 8
     val existing = channels.map { it.index }.toSet()
-    // Always pick a FREE slot above existing ones — never silently land on an occupied
-    // slot (which would clobber a channel, e.g. Public at slot 0).
-    val freeSlot = (0 until maxChannels).firstOrNull { it !in existing }
+    // Slot 0 is reserved for the protected Public channel; new channels go in slots 1+.
+    val freeSlot = (1 until maxChannels).firstOrNull { it !in existing }
+    val freeSlots = (1 until maxChannels).count { it !in existing }
     val loaded = channels.isNotEmpty() // device always has ≥1 channel; empty = not synced yet
+    // The Public channel needs restoring if slot 0 is missing or no longer the canonical one.
+    val publicEntry = channels.firstOrNull { it.index == PublicChannel.INDEX }
+    val publicNeedsRestore = loaded && (publicEntry == null || !PublicChannel.isCanonical(publicEntry))
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             OutlinedButton(onClick = { creating = true }, enabled = loaded && freeSlot != null) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text(if (loaded && freeSlot == null) "  Channels full" else "  New channel")
+            }
+            OutlinedButton(onClick = { addingRegion = true }, enabled = loaded && freeSlots > 0) {
+                Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("  Add region")
+            }
+            if (publicNeedsRestore) {
+                OutlinedButton(onClick = { session.restorePublicChannel() }) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("  Restore Public")
+                }
             }
         }
         if (channels.isEmpty()) {
@@ -276,18 +301,33 @@ private fun ChannelsList(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(channels, key = { "ch:${it.index}" }) { ch ->
+                    // The Public channel (slot 0) is protected: no rename/re-key/delete.
+                    val protectedPublic = ch.index == PublicChannel.INDEX
                     ConversationRow(
                         icon = Icons.Default.Campaign,
                         tint = MaterialTheme.colorScheme.tertiary,
                         title = ch.displayName,
-                        subtitle = "Channel ${ch.index} · long-press to edit",
+                        subtitle = if (protectedPublic) "Channel ${ch.index} · protected"
+                        else "Channel ${ch.index} · long-press to edit",
                         onClick = { onOpen(Conversation.channelId(ch.index), ch.displayName) },
-                        onLongClick = { editing = ch },
+                        onLongClick = if (protectedPublic) null else ({ editing = ch }),
                         unread = unread[Conversation.channelId(ch.index)] ?: 0,
                     )
                 }
             }
         }
+    }
+
+    if (addingRegion) {
+        RegionChannelsDialog(
+            freeSlots = freeSlots,
+            onAdd = { picked ->
+                val n = session.addChannels(picked.map { it.name to it.secret })
+                Toast.makeText(ctx, "Added $n channel(s)", Toast.LENGTH_SHORT).show()
+                addingRegion = false
+            },
+            onDismiss = { addingRegion = false },
+        )
     }
 
     if (creating && freeSlot != null) {
@@ -355,7 +395,8 @@ private fun ImportContactDialog(onDismiss: () -> Unit, onImport: (String) -> Uni
 
 @Composable
 private fun ExportCardDialog(card: String, onDismiss: () -> Unit) {
-    val qr = rememberQrBitmap(card)
+    // Encode the official MeshCore contact URL so other clients (incl. the official app) can scan it.
+    val qr = rememberQrBitmap("meshcore://$card")
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Contact card") },
@@ -365,7 +406,7 @@ private fun ExportCardDialog(card: String, onDismiss: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (qr != null) {
-                    Text("Scan this from another device to add this contact.",
+                    Text("Scan this from any MeshCore app to add this contact.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     Image(
@@ -424,11 +465,21 @@ private fun ChannelDialog(
                     isError = !secretValid,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                val isHashtag = name.trim().startsWith("#")
+                Text(
+                    "Tip: for a community #channel (e.g. #salishmesh), type its name above, then tap " +
+                        "“Key from #name” to derive the shared key.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { secretHex = randomSecretHex() }) { Text("Randomize key") }
-                    Text("Slot $slot", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        modifier = Modifier.align(Alignment.CenterVertically))
+                    OutlinedButton(onClick = { secretHex = randomSecretHex() }) { Text("Randomize") }
+                    OutlinedButton(
+                        onClick = { secretHex = RegionChannels.hashChannelSecret(name.trim()).toHex() },
+                        enabled = isHashtag,
+                    ) { Text("Key from #name") }
                 }
+                Text("Slot $slot", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 if (onDelete != null) {
                     TextButton(onClick = { confirmDelete = true }) {
                         Text("Delete channel", color = MaterialTheme.colorScheme.error)

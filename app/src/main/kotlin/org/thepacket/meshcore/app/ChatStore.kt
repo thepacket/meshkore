@@ -15,6 +15,29 @@ import java.io.File
 class ChatStore(private val file: File) {
     constructor(context: Context) : this(File(context.filesDir, "chats.json"))
 
+    private val unreadFile: File get() = File(file.absoluteFile.parentFile, "unread.json")
+
+    /** Per-conversation unread counts (survives app restarts). */
+    fun loadUnread(): Map<String, Int> {
+        if (!unreadFile.exists()) return emptyMap()
+        return try {
+            val o = JSONObject(unreadFile.readText())
+            buildMap { for (k in o.keys()) o.getInt(k).takeIf { it > 0 }?.let { put(k, it) } }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun saveUnread(map: Map<String, Int>) {
+        try {
+            val o = JSONObject()
+            map.forEach { (k, v) -> if (v > 0) o.put(k, v) }
+            unreadFile.writeText(o.toString())
+        } catch (_: Exception) {
+            // best-effort
+        }
+    }
+
     fun load(): Map<String, List<ChatMessage>> {
         if (!file.exists()) return emptyMap()
         return try {

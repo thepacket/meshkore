@@ -1,6 +1,7 @@
 package org.thepacket.meshcore.app
 
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.hexToBytes
 import org.thepacket.meshcore.protocol.toHex
 
 /**
@@ -32,6 +33,21 @@ fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double 
         Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
         Math.sin(dLon / 2) * Math.sin(dLon / 2)
     return r * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+/**
+ * MeshCore's well-known **Public** channel: always slot 0, name "Public", and the standard
+ * 128-bit PSK (base64 `izOH6cXN6mrJ5e26oRXNcg==`). It's reserved and protected from edits so it
+ * can't be accidentally renamed, re-keyed, or deleted — and can be restored if it drifts.
+ */
+object PublicChannel {
+    const val INDEX = 0
+    const val NAME = "Public"
+    val SECRET: ByteArray = "8b3387e9c5cdea6ac9e5edbaa115cd72".hexToBytes()
+
+    /** True if [e] is exactly the canonical Public channel (right slot, name, and key). */
+    fun isCanonical(e: ChannelEntry): Boolean =
+        e.index == INDEX && e.name == NAME && e.secret.size >= 16 && e.secret.copyOf(16).contentEquals(SECRET)
 }
 
 /** A group channel slot enumerated from the device. [secret] is the 128-bit key (empty if unknown). */

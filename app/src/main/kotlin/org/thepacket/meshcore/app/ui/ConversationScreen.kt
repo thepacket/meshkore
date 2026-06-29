@@ -189,6 +189,8 @@ private fun MessageBubble(m: ChatMessage, author: String?, onResend: (ChatMessag
             }
             Text(m.text, style = MaterialTheme.typography.bodyLarge)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(messageTime(m.timestampSecs), style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                 if (m.incoming && m.snrDb != null) {
                     Text("SNR ${m.snrDb} dB", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
@@ -234,6 +236,18 @@ private fun RoomLoginDialog(loggedIn: Boolean, onDismiss: () -> Unit, onLogin: (
         confirmButton = { TextButton(onClick = { onDismiss(); onLogin(password) }) { Text("Log in") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** "HH:mm" for messages from today, "MMM d, HH:mm" for older ones. */
+private fun messageTime(secs: Long): String {
+    if (secs <= 0) return ""
+    val ms = secs * 1000
+    val now = java.util.Calendar.getInstance()
+    val then = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+    val sameDay = now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
+        now.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR)
+    val pattern = if (sameDay) "HH:mm" else "MMM d, HH:mm"
+    return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(java.util.Date(ms))
 }
 
 @Composable
