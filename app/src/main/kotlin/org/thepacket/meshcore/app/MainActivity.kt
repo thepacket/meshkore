@@ -120,6 +120,8 @@ class MainActivity : ComponentActivity() {
                         mapFocus = state.mapFocus,
                         onShowOnMap = vm::showOnMap,
                         onMapFocusConsumed = vm::consumeMapFocus,
+                        chatsTab = state.chatsTab,
+                        onChatsTab = vm::setChatsTab,
                     )
                     is Screen.Conversation -> {
                         // A room-server conversation gets a login banner + per-post authors.
@@ -139,6 +141,7 @@ class MainActivity : ComponentActivity() {
                             onBack = vm::backToHome,
                             onSend = { text -> vm.sendMessage(screen.conversationId, text) },
                             onLogin = { pw -> roomContact?.let { vm.session.loginRepeater(it, pw) } },
+                            onResend = vm::resendMessage,
                         )
                     }
                 }

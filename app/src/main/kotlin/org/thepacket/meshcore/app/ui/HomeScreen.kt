@@ -9,13 +9,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.CircleShape
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -45,7 +50,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -80,8 +84,9 @@ fun HomeContent(
     onOpenConversation: (id: String, title: String) -> Unit,
     modifier: Modifier = Modifier,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+    tab: Int = 0,
+    onTab: (Int) -> Unit = {},
 ) {
-    var tab by remember { mutableIntStateOf(0) }
     // An exported contact card arrives asynchronously — show it for copy/share.
     var exportedCard by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(session) {
@@ -93,8 +98,8 @@ fun HomeContent(
             Box(Modifier.padding(12.dp)) { DeviceHeader(it) }
         }
         TabRow(selectedTabIndex = tab) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Contacts") })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Channels") })
+            Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Contacts") })
+            Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Channels") })
         }
         when (tab) {
             0 -> ContactsList(session, self, contacts, onOpenConversation, onShowOnMap)
@@ -122,6 +127,7 @@ private fun ContactsList(
     var query by remember { mutableStateOf("") }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
+    val unread by session.unread.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     // Repeater/room management takes over the whole pane when open.
@@ -196,6 +202,7 @@ private fun ContactsList(
                             else onOpen(Conversation.dmId(c), c.name.ifBlank { c.keyPrefixHex })
                         },
                         onLongClick = { detail = c },
+                        unread = unread[Conversation.dmId(c)] ?: 0,
                     )
                 }
             }
@@ -242,6 +249,7 @@ private fun ChannelsList(
     onOpen: (String, String) -> Unit,
 ) {
     val deviceInfo by session.deviceInfo.collectAsStateWithLifecycle()
+    val unread by session.unread.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<ChannelEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
 
@@ -275,6 +283,7 @@ private fun ChannelsList(
                         subtitle = "Channel ${ch.index} · long-press to edit",
                         onClick = { onOpen(Conversation.channelId(ch.index), ch.displayName) },
                         onLongClick = { editing = ch },
+                        unread = unread[Conversation.channelId(ch.index)] ?: 0,
                     )
                 }
             }
@@ -309,14 +318,27 @@ private fun ChannelsList(
 @Composable
 private fun ImportContactDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let { text = it.trim() } // fill the field so the user can review, then Import
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Import contact") },
         text = {
             Column {
-                Text("Paste a contact card (hex) exported from another node.",
+                Text("Scan a contact QR, or paste a contact card (hex) exported from another node.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                OutlinedButton(
+                    onClick = {
+                        scanLauncher.launch(
+                            ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                .setOrientationLocked(false).setBeepEnabled(false)
+                                .setPrompt("Scan a contact QR")
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                ) { Text("Scan QR") }
                 OutlinedTextField(
                     value = text, onValueChange = { text = it },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -333,12 +355,27 @@ private fun ImportContactDialog(onDismiss: () -> Unit, onImport: (String) -> Uni
 
 @Composable
 private fun ExportCardDialog(card: String, onDismiss: () -> Unit) {
+    val qr = rememberQrBitmap(card)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Contact card") },
         text = {
-            SelectionContainer {
-                Text(card, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (qr != null) {
+                    Text("Scan this from another device to add this contact.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    Image(
+                        bitmap = qr, contentDescription = "Contact QR code",
+                        modifier = Modifier.size(240.dp),
+                    )
+                }
+                SelectionContainer {
+                    Text(card, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
@@ -520,6 +557,7 @@ private fun ConversationRow(
     subtitle: String,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    unread: Int = 0,
 ) {
     Card(Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Row(
@@ -537,6 +575,22 @@ private fun ConversationRow(
                 Text(subtitle, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             }
+            if (unread > 0) UnreadBadge(unread)
+        }
+    }
+}
+
+/** A small pill showing the number of unread incoming messages in a conversation. */
+@Composable
+private fun UnreadBadge(count: Int) {
+    Surface(color = MaterialTheme.colorScheme.primary, shape = CircleShape) {
+        Box(Modifier.defaultMinSize(minWidth = 22.dp, minHeight = 22.dp).padding(horizontal = 6.dp),
+            contentAlignment = Alignment.Center) {
+            Text(
+                if (count > 99) "99+" else "$count",
+                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
         }
     }
 }

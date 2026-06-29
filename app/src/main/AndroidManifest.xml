@@ -1,10 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Map tiles (osmdroid). No location permission: the map is read-only and
-         never accesses the phone's GPS or changes this node's advertised position. -->
+    <!-- Map tiles (osmdroid). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Phone GPS, used only when the user taps "Use current location" in Settings to fill in
+         this node's position. The BLE module caps this at API 30 (BLE-scan only); lift that cap
+         here so the explicit position feature works on all API levels. -->
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        tools:remove="android:maxSdkVersion" />
 
     <!-- Background message notifications: a foreground service keeps the BLE link alive while
          the app is backgrounded; POST_NOTIFICATIONS is the runtime permission to show them. -->

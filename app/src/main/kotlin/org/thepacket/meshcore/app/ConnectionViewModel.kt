@@ -33,6 +33,8 @@ data class UiState(
     val error: String? = null,
     val screen: Screen = Screen.Connect,
     val tab: MainTab = MainTab.Chats,
+    /** Chats sub-tab: 0 = Contacts, 1 = Channels. Hoisted so it survives entering a conversation. */
+    val chatsTab: Int = 0,
     /** When set, the Map tab should centre on these coordinates (lat, lon in degrees). */
     val mapFocus: Pair<Double, Double>? = null,
 )
@@ -142,6 +144,9 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Re-send a failed message. */
+    fun resendMessage(msg: ChatMessage) = session.resend(msg)
+
     // ---- navigation ----
     fun setTab(tab: MainTab) = _ui.update { it.copy(tab = tab) }
 
@@ -152,8 +157,17 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     /** The Map consumed its pending focus target. */
     fun consumeMapFocus() = _ui.update { it.copy(mapFocus = null) }
 
-    fun openConversation(id: String, title: String) =
-        _ui.update { it.copy(screen = Screen.Conversation(id, title)) }
+    fun setChatsTab(index: Int) = _ui.update { it.copy(chatsTab = index) }
 
-    fun backToHome() = _ui.update { it.copy(screen = Screen.Main) }
+    fun openConversation(id: String, title: String) {
+        session.setActiveConversation(id)
+        // Remember which sub-tab this conversation belongs to, so leaving it returns there.
+        val chatsTab = if (id.startsWith("ch:")) 1 else 0
+        _ui.update { it.copy(screen = Screen.Conversation(id, title), chatsTab = chatsTab) }
+    }
+
+    fun backToHome() {
+        session.setActiveConversation(null)
+        _ui.update { it.copy(screen = Screen.Main) }
+    }
 }

@@ -1,6 +1,7 @@
 package org.thepacket.meshcore.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +68,7 @@ fun ConversationScreen(
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onLogin: (password: String) -> Unit,
+    onResend: (ChatMessage) -> Unit = {},
 ) {
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -144,7 +146,7 @@ fun ConversationScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(messages, key = { it.localId }) {
-                    MessageBubble(it, it.authorPrefix?.let(authorName))
+                    MessageBubble(it, it.authorPrefix?.let(authorName), onResend)
                 }
             }
             ComposeBar(
@@ -168,7 +170,7 @@ fun ConversationScreen(
 }
 
 @Composable
-private fun MessageBubble(m: ChatMessage, author: String?) {
+private fun MessageBubble(m: ChatMessage, author: String?, onResend: (ChatMessage) -> Unit) {
     val align = if (m.incoming) Alignment.CenterStart else Alignment.CenterEnd
     val bubble = if (m.incoming) MaterialTheme.colorScheme.surfaceVariant
     else MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
@@ -193,7 +195,15 @@ private fun MessageBubble(m: ChatMessage, author: String?) {
                 }
                 if (!m.incoming) {
                     val (label, color) = statusLabel(m.status)
-                    Text(label, style = MaterialTheme.typography.labelSmall, color = color, fontWeight = FontWeight.Medium)
+                    if (m.status == MsgStatus.Failed) {
+                        Text(
+                            "Failed — tap to retry",
+                            style = MaterialTheme.typography.labelSmall, color = color, fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { onResend(m) },
+                        )
+                    } else {
+                        Text(label, style = MaterialTheme.typography.labelSmall, color = color, fontWeight = FontWeight.Medium)
+                    }
                 }
             }
         }

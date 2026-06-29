@@ -1,9 +1,14 @@
 package org.thepacket.meshcore.app.ui
 
+import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
+import android.location.LocationManager
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -216,9 +221,25 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         var lat by remember(self) { mutableStateOf(if (self.advLat == 0 && self.advLon == 0) "" else trimNum(self.advLat / 1e6)) }
         var lon by remember(self) { mutableStateOf(if (self.advLat == 0 && self.advLon == 0) "" else trimNum(self.advLon / 1e6)) }
         var showPicker by remember { mutableStateOf(false) }
+        val locPermLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) fetchCurrentLocation(ctx, { la, lo -> lat = "%.5f".format(la); lon = "%.5f".format(lo) }, { toast(ctx, it) })
+            else toast(ctx, "Location permission denied")
+        }
+        fun useCurrentLocation() {
+            if (ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) fetchCurrentLocation(ctx, { la, lo -> lat = "%.5f".format(la); lon = "%.5f".format(lo) }, { toast(ctx, it) })
+            else locPermLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        }
         SectionCard("Position") {
             Field("Latitude (°)", lat) { lat = it }
             Field("Longitude (°)", lon) { lon = it }
+            // The phone's GPS is never read automatically — only on this explicit tap.
+            OutlinedButton(onClick = { useCurrentLocation() }, modifier = Modifier.fillMaxWidth()) {
+                Text("Use current location")
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 OutlinedButton(onClick = { showPicker = true }) { Text("Pick on map") }
                 Button(onClick = {
@@ -496,3 +517,30 @@ private fun SaveRow(label: String = "Save", onClick: () -> Unit) {
 
 private fun toast(ctx: android.content.Context, msg: String) =
     Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+
+/**
+ * Read a one-shot fix from the phone's GPS/network provider. Caller must hold ACCESS_FINE_LOCATION.
+ * Prefers a fresh fix (API 30+), falling back to the best recent last-known location.
+ */
+@SuppressLint("MissingPermission")
+private fun fetchCurrentLocation(ctx: Context, onResult: (Double, Double) -> Unit, onError: (String) -> Unit) {
+    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        ?: return onError("Location service unavailable")
+    val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+        .filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
+    if (providers.isEmpty()) return onError("Location is off — enable it and retry")
+
+    fun bestLastKnown(): android.location.Location? =
+        providers.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        lm.getCurrentLocation(providers.first(), null, ctx.mainExecutor) { loc ->
+            val l = loc ?: bestLastKnown()
+            if (l != null) onResult(l.latitude, l.longitude)
+            else onError("Couldn't get a fix — try again outdoors")
+        }
+    } else {
+        val l = bestLastKnown()
+        if (l != null) onResult(l.latitude, l.longitude) else onError("No recent location — enable GPS and retry")
+    }
+}

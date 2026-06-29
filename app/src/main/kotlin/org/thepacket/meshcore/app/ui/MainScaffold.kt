@@ -50,6 +50,8 @@ fun MainScaffold(
     mapFocus: Pair<Double, Double>? = null,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
     onMapFocusConsumed: () -> Unit = {},
+    chatsTab: Int = 0,
+    onChatsTab: (Int) -> Unit = {},
 ) {
     val title = when (tab) {
         MainTab.Chats -> self?.name?.ifBlank { "MeshKore" } ?: "MeshKore"
@@ -116,7 +118,7 @@ fun MainScaffold(
     ) { pad ->
         val m = Modifier.padding(pad)
         when (tab) {
-            MainTab.Chats -> HomeContent(session, self, channels, contacts, onOpenConversation, m, onShowOnMap)
+            MainTab.Chats -> HomeContent(session, self, channels, contacts, onOpenConversation, m, onShowOnMap, chatsTab, onChatsTab)
             MainTab.Heard -> HeardContent(heard, contacts, self, session, m, onShowOnMap)
             MainTab.Packets -> PacketMonitorContent(packets, contacts, self, session, m, onShowOnMap)
             MainTab.Stats -> StatsContent(radio, core, packetStats, noiseHistory, telemetry, session::refreshTelemetry, m)

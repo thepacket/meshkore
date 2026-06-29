@@ -95,6 +95,19 @@ class MeshSession(
     private val _messages = MutableStateFlow<Map<String, List<ChatMessage>>>(emptyMap())
     val messages: StateFlow<Map<String, List<ChatMessage>>> = _messages.asStateFlow()
 
+    /** Unread incoming-message counts per conversation id (cleared when its chat is open). */
+    private val _unread = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unread: StateFlow<Map<String, Int>> = _unread.asStateFlow()
+
+    /** The conversation currently on screen; its incoming messages never count as unread. */
+    @Volatile private var activeConv: String? = null
+
+    /** Mark a conversation open (or null when leaving); opening also clears its unread count. */
+    fun setActiveConversation(convId: String?) {
+        activeConv = convId
+        if (convId != null && _unread.value.containsKey(convId)) _unread.update { it - convId }
+    }
+
     // ---- instrumentation (P2) ----
     /** Live raw-packet feed (newest first, capped). */
     private val _packets = MutableStateFlow<List<RxLog>>(emptyList())
@@ -443,6 +456,24 @@ class MeshSession(
         }
     }
 
+    /** Re-send a previously-failed outgoing message in place (no new bubble). */
+    fun resend(msg: ChatMessage) {
+        if (msg.incoming) return
+        updateMessage(msg.localId) { it.copy(status = MsgStatus.Sending) }
+        pendingSends.addLast(msg.localId)
+        val cid = msg.conversationId
+        scope.launch {
+            runCatching {
+                if (cid.startsWith("ch:")) {
+                    val idx = cid.removePrefix("ch:").toIntOrNull() ?: return@launch
+                    link.send(Requests.sendChannelTextMessage(idx, msg.text, msg.timestampSecs))
+                } else {
+                    link.send(Requests.sendTextMessage(cid.hexToBytes(), msg.text, msg.timestampSecs))
+                }
+            }.onFailure { updateMessage(msg.localId) { it.copy(status = MsgStatus.Failed) } }
+        }
+    }
+
     // ---- settings writes (each elicits an OK/ERR -> settingsResult) -------
 
     fun applyNodeName(name: String) = applySetting("Node name", Requests.setAdvertName(name))
@@ -482,6 +513,7 @@ class MeshSession(
     /** Clear local app data (chat history, heard list, packet feed). Contacts re-sync on connect. */
     fun purgeLocalData() {
         _messages.value = emptyMap()
+        _unread.value = emptyMap()
         chatStore?.save(emptyMap())
         _heard.value = emptyList()
         _packets.value = emptyList()
@@ -888,6 +920,7 @@ class MeshSession(
             authorPrefix = m.signerPrefix.takeIf { it.isNotEmpty() }?.toHex(),
         )
         appendMessage(msg)
+        if (convId != activeConv) _unread.update { it + (convId to ((it[convId] ?: 0) + 1)) }
         _incomingMessages.tryEmit(msg)
     }
 
