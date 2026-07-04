@@ -14,10 +14,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -31,9 +38,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.thepacket.meshcore.app.ChannelEntry
+import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.GroupCipher
+import org.thepacket.meshcore.protocol.LoRaAirtime
 import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.ParsedPacket
 import org.thepacket.meshcore.protocol.PathDiscoveryResult
@@ -55,20 +66,51 @@ fun PacketMonitorContent(
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
 ) {
     var detail by remember { mutableStateOf<RxLog?>(null) }
+    var query by remember { mutableStateOf("") }
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
+    val channels by session.channels.collectAsStateWithLifecycle()
+    val messages by session.messages.collectAsStateWithLifecycle()
 
-    if (packets.isEmpty()) {
-        Box(modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-            Text("Listening for packets…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+    // Text filter over the live feed: matches the type, route, source, and path hop names.
+    val filtered = remember(packets, query, contacts, self) {
+        val q = query.trim()
+        if (q.isEmpty()) packets
+        else packets.filter { log ->
+            val p = PacketInspector.parse(log.raw)
+            val hay = buildString {
+                append(log.typeName); append(' '); append(log.routeName); append(' ')
+                rowSource(p, contacts, self)?.let { append(it); append(' ') }
+                p.pathHashes.forEach { append(hopLabel(it, contacts, self)); append(' ') }
+                p.destHash?.let { append(hopLabel(it, contacts, self)) }
+            }
+            hay.contains(q, ignoreCase = true)
         }
-    } else {
-        LazyColumn(
-            modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            items(packets, key = { System.identityHashCode(it) }) { p ->
-                PacketRow(p, contacts, self) { detail = p }
+    }
+
+    Column(modifier.fillMaxSize()) {
+        if (packets.isNotEmpty()) {
+            PacketSearchField(
+                query = query, onQueryChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+        if (packets.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                Text("Listening for packets…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+        } else if (filtered.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                Text("No packets match \"$query\".", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(filtered, key = { System.identityHashCode(it) }) { p ->
+                    PacketRow(p, contacts, self) { detail = p }
+                }
             }
         }
     }
@@ -78,6 +120,9 @@ fun PacketMonitorContent(
         val srcKey = sourcePubKey(parsed, contacts)
         PacketDetailDialog(
             log, parsed, contacts, self, onShowOnMap,
+            channels = channels,
+            outgoing = messages.values.flatten().filter { !it.incoming },
+            allPackets = packets,
             pathResult = srcKey?.let { pathDiscovery[it.copyOf(6).toHex()] },
             onDiscoverPath = srcKey?.let { key -> { session.discoverPath(key) } },
         ) { detail = null }
@@ -101,11 +146,16 @@ private fun PacketDetailDialog(
     contacts: List<Contact>,
     self: SelfInfo?,
     onShowOnMap: (lat: Double, lon: Double) -> Unit,
+    channels: List<ChannelEntry>,
+    outgoing: List<ChatMessage>,
+    allPackets: List<RxLog>,
     pathResult: PathDiscoveryResult?,
     onDiscoverPath: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     val srcPos = sourcePosition(p, contacts)
+    val group = remember(log, channels) { decodeGroup(p, channels) }
+    val copies = remember(log, allPackets) { rebroadcastCopies(log, allPackets) }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
@@ -122,9 +172,28 @@ private fun PacketDetailDialog(
                     kv("Route", "${p.routeName}  (v${p.version})")
                     p.srcHash?.let { kv("Source", resolveHash(it, contacts, self)) }
                     p.destHash?.let { kv("Destination", resolveHash(it, contacts, self)) }
-                    p.channelHash?.let { kv("Channel hash", "0x%02X".format(it)) }
-                    kv("Path", if (p.pathHashes.isEmpty()) "direct (0 hops)"
-                        else "${p.pathHashes.size} hop(s): " + p.pathHashes.joinToString(" → ") { hopLabel(it, contacts, self) })
+
+                    // Group message: resolve the channel and, when we hold its key, the cleartext.
+                    p.channelHash?.let { h ->
+                        kv("Channel", "0x%02X".format(h) +
+                            (group?.channelName?.let { " · $it" } ?: " · not our channel"))
+                    }
+                    group?.let { g ->
+                        g.text?.let { kvBlock("Message", it) }
+                        g.sentAtSecs?.let { kv("Sent", epochTime(it)) }
+                        g.dataType?.let { kv("Data type", "0x%04X".format(it)) }
+                        if (g.decryptFailed) kv("Message", "(decrypt failed)")
+                    }
+
+                    if (p.payloadType == PayloadType.TRACE) {
+                        kv("Hop SNRs", if (p.traceHopSnrsQ.isEmpty()) "(no hops yet)"
+                            else p.traceHopSnrsQ.joinToString(", ") { "%.1f".format(it / 4.0) } + " dB")
+                        if (p.traceRoute.isNotEmpty())
+                            kv("Trace route", p.traceRoute.joinToString(" → ") { hopLabel(it, contacts, self) })
+                    } else {
+                        kv("Path", if (p.pathHashes.isEmpty()) "direct (0 hops)"
+                            else "${p.pathHashes.size} hop(s): " + p.pathHashes.joinToString(" → ") { hopLabel(it, contacts, self) })
+                    }
                     p.transportCodes?.let { kv("Transport", "0x%04X, 0x%04X".format(it[0], it[1])) }
                     p.mac?.let { kv("MAC", it.toHex()) }
 
@@ -132,20 +201,36 @@ private fun PacketDetailDialog(
                     p.advertPubKey?.let { key ->
                         kv("Advertiser", resolveKey(key, contacts, self))
                         p.advertType?.let { kv("Node type", typeLabel(it)) }
-                        p.advertTimestamp?.let { kv("Advert time", epoch(it)) }
+                        p.advertTimestamp?.let {
+                            kv("Advert time", epoch(it))
+                            kv("Sender clock", clockSkew(it, log.receivedAtMs))
+                        }
                         val lat = p.advertLat; val lon = p.advertLon
-                        if (lat != null && lon != null)
-                            kv("Position", "%.5f, %.5f".format(lat / 1e6, lon / 1e6))
+                        if (lat != null && lon != null) {
+                            val dist = selfDistanceKm(self, lat / 1e6, lon / 1e6)
+                            kv("Position", "%.5f, %.5f".format(lat / 1e6, lon / 1e6) +
+                                (dist?.let { "  (${fmtDistance(it)})" } ?: ""))
+                        }
                         kv("Public key", key.toHex())
                     }
                     p.ephemeralPubKey?.let { kv("Ephemeral key", it.toHex()) }
-                    p.ackCode?.let { kv("ACK code", it.toHex()) }
+                    p.ackCode?.let { code ->
+                        kv("ACK code", code.toHex())
+                        if (matchesOurMessage(code, outgoing)) kv("Matches", "ACK for our message")
+                    }
                     p.traceTag?.let { kv("Trace tag", "0x%08X".format(it)) }
 
-                    kv("Received", clockTime(log.receivedAtMs))
+                    kv("Received", clockTime(log.receivedAtMs) + "  (${ageLabel(log.receivedAtMs)})")
                     kv("SNR / RSSI", "${log.snrDb} dB / ${log.rssi} dBm")
+                    linkMargin(log.snrDb, self)?.let { kv("Link margin", it) }
                     kv("Length", "${log.length} B  (payload ${p.payloadLen} B)")
+                    self?.let { s ->
+                        LoRaAirtime.airtimeMs(log.length, s.bwKhz, s.radioSf, s.radioCr)?.let {
+                            kv("Airtime", "~${it.toInt()} ms")
+                        }
+                    }
                     kv("Header", "0x%02X".format(p.header))
+                    if (copies > 1) kv("Seen", "$copies copies in log (flood rebroadcasts)")
 
                     if (onDiscoverPath != null) {
                         PathSection(pathResult, onDiscoverPath) { hopLabel(it, contacts, self) }
@@ -157,6 +242,96 @@ private fun PacketDetailDialog(
             }
         },
     )
+}
+
+/** What we could recover from a GRP_TXT/GRP_DATA payload with our channel keys. */
+private data class DecodedGroup(
+    val channelName: String?,
+    val text: String? = null,
+    val sentAtSecs: Long? = null,
+    val dataType: Int? = null,
+    val decryptFailed: Boolean = false,
+)
+
+/** Match the channel hash against our channels and try each matching key (MAC-checked). */
+private fun decodeGroup(p: ParsedPacket, channels: List<ChannelEntry>): DecodedGroup? {
+    val hash = p.channelHash ?: return null
+    if (p.payload.size < 2) return null
+    val body = p.payload.copyOfRange(1, p.payload.size) // after the channel-hash byte
+    val matching = channels.filter { it.secret.isNotEmpty() && GroupCipher.channelHash(it.secret) == hash }
+    if (matching.isEmpty()) return null
+    for (ch in matching) {
+        val plain = GroupCipher.decrypt(ch.secret, body) ?: continue
+        return when (p.payloadType) {
+            PayloadType.GRP_TXT -> GroupCipher.parseGroupText(plain)?.let {
+                DecodedGroup(ch.displayName, text = it.text, sentAtSecs = it.timestamp)
+            } ?: DecodedGroup(ch.displayName, decryptFailed = true)
+            PayloadType.GRP_DATA ->
+                DecodedGroup(ch.displayName, dataType = GroupCipher.parseGroupDataType(plain))
+            else -> DecodedGroup(ch.displayName)
+        }
+    }
+    return DecodedGroup(matching.first().displayName, decryptFailed = true)
+}
+
+/** Does a 4-byte over-the-air ACK code match the expected ack of one of our sent messages? */
+private fun matchesOurMessage(code: ByteArray, outgoing: List<ChatMessage>): Boolean {
+    if (code.size < 4) return false
+    val ack = (code[0].toLong() and 0xFF) or ((code[1].toLong() and 0xFF) shl 8) or
+        ((code[2].toLong() and 0xFF) shl 16) or ((code[3].toLong() and 0xFF) shl 24)
+    return ack != 0L && outgoing.any { it.expectedAck == ack }
+}
+
+/** How far the received SNR sits above the SF's demodulation floor (Semtech figures). */
+private fun linkMargin(snrDb: Double, self: SelfInfo?): String? {
+    val sf = self?.radioSf ?: return null
+    val floor = when (sf) {
+        7 -> -7.5; 8 -> -10.0; 9 -> -12.5; 10 -> -15.0; 11 -> -17.5; 12 -> -20.0
+        else -> return null
+    }
+    return "%+.1f dB above SF%d floor".format(snrDb - floor, sf)
+}
+
+/** The sender's clock offset, judged from an advert's creation timestamp vs our receive time. */
+private fun clockSkew(advertSecs: Long, receivedAtMs: Long): String {
+    val d = advertSecs - receivedAtMs / 1000
+    return if (d in -3..3) "in sync with ours" else "%+d s vs our clock".format(d)
+}
+
+private fun selfDistanceKm(self: SelfInfo?, lat: Double, lon: Double): Double? {
+    if (self == null || (self.advLat == 0 && self.advLon == 0)) return null
+    if (lat == 0.0 && lon == 0.0) return null
+    return haversineKm(self.advLat / 1e6, self.advLon / 1e6, lat, lon)
+}
+
+/**
+ * How many packets in the log carry this same type+payload. The path is excluded from
+ * the hash, so flood rebroadcasts (whose paths grow at each hop) count as copies.
+ */
+private fun rebroadcastCopies(log: RxLog, all: List<RxLog>): Int {
+    val target = payloadFingerprint(log)
+    return all.count { payloadFingerprint(it) == target }
+}
+
+/** FNV-1a over the payload type + payload bytes (path excluded), like the on-device UI. */
+private fun payloadFingerprint(log: RxLog): Long {
+    val p = PacketInspector.parse(log.raw)
+    var h = 2166136261L
+    h = ((h xor p.payloadType.toLong()) * 16777619L) and 0xFFFFFFFFL
+    for (b in p.payload) h = ((h xor (b.toLong() and 0xFF)) * 16777619L) and 0xFFFFFFFFL
+    return h
+}
+
+private fun epochTime(sec: Long): String =
+    SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(sec * 1000))
+
+/** A label/value where the value can be long free text (a decrypted message). */
+@Composable
+private fun kvBlock(label: String, value: String) {
+    Column {
+        Text(label, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        Text(value, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+    }
 }
 
 @Composable
@@ -289,6 +464,25 @@ private fun TypePill(type: Int, label: String) {
     ) {
         Text(label, color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
     }
+}
+
+/** Filter box over the live feed (the standalone UI's "path search", widened to any field). */
+@Composable
+private fun PacketSearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = query, onValueChange = onQueryChange,
+        modifier = modifier, singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium,
+        placeholder = { Text("Filter by node, path, or type", style = MaterialTheme.typography.bodyMedium) },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp)) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear filter", modifier = Modifier.size(20.dp))
+                }
+            }
+        },
+    )
 }
 
 private fun payloadColor(type: Int): Color = when (type) {

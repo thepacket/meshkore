@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Login
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,8 +45,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.HeardEntry
@@ -65,12 +74,16 @@ fun ConversationScreen(
     self: SelfInfo?,
     /** Non-null when this conversation is a room server: its current login state. */
     roomLogin: RepeaterLogin?,
+    /** True for a group channel (its incoming texts usually embed the sender's name). */
+    isChannel: Boolean,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onLogin: (password: String) -> Unit,
     onResend: (ChatMessage) -> Unit = {},
 ) {
     var draft by remember { mutableStateOf("") }
+    /** Quoted text being replied to (tap a bubble to set it); sent as a leading "> …" line. */
+    var replyTo by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
 
     // Resolve a room post's author (4-byte key prefix, hex) to a friendly name. Room members
@@ -145,16 +158,26 @@ fun ConversationScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(messages, key = { it.localId }) {
-                    MessageBubble(it, it.authorPrefix?.let(authorName), onResend)
+                items(messages, key = { it.localId }) { m ->
+                    MessageBubble(
+                        m, m.authorPrefix?.let(authorName), onResend,
+                        onReply = { replyTo = quoteOf(m, m.authorPrefix?.let(authorName), title, self, isChannel) },
+                    )
                 }
+            }
+            replyTo?.let { r ->
+                ReplyStrip(r, onCancel = { replyTo = null })
             }
             ComposeBar(
                 draft = draft,
                 onDraftChange = { draft = it },
                 onSend = {
                     val t = draft.trim()
-                    if (t.isNotEmpty()) { onSend(t); draft = "" }
+                    if (t.isNotEmpty()) {
+                        // Interop with the on-device UI: a reply is a leading quoted "> …" line.
+                        onSend(replyTo?.let { "> $it\n$t" } ?: t)
+                        draft = ""; replyTo = null
+                    }
                 },
             )
         }
@@ -170,7 +193,12 @@ fun ConversationScreen(
 }
 
 @Composable
-private fun MessageBubble(m: ChatMessage, author: String?, onResend: (ChatMessage) -> Unit) {
+private fun MessageBubble(
+    m: ChatMessage,
+    author: String?,
+    onResend: (ChatMessage) -> Unit,
+    onReply: () -> Unit = {},
+) {
     val align = if (m.incoming) Alignment.CenterStart else Alignment.CenterEnd
     val bubble = if (m.incoming) MaterialTheme.colorScheme.surfaceVariant
     else MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
@@ -180,6 +208,7 @@ private fun MessageBubble(m: ChatMessage, author: String?, onResend: (ChatMessag
             Modifier
                 .widthIn(max = 280.dp)
                 .background(bubble, RoundedCornerShape(14.dp))
+                .clickable(onClick = onReply)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             // Room posts: who wrote it (the conversation is the room, the author is the signer).
@@ -187,7 +216,7 @@ private fun MessageBubble(m: ChatMessage, author: String?, onResend: (ChatMessag
                 Text(author, style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
             }
-            Text(m.text, style = MaterialTheme.typography.bodyLarge)
+            MessageText(m.text)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(messageTime(m.timestampSecs), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
@@ -207,6 +236,92 @@ private fun MessageBubble(m: ChatMessage, author: String?, onResend: (ChatMessag
                         Text(label, style = MaterialTheme.typography.labelSmall, color = color, fontWeight = FontWeight.Medium)
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Message body with the two plain-text chat conventions rendered richly:
+ * lines starting with ">" (a quoted reply) are dimmed + italic, and http(s) URLs
+ * become tappable links that open in the browser.
+ */
+@Composable
+private fun MessageText(text: String) {
+    val linkColor = MaterialTheme.colorScheme.primary
+    val quoteColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+    val annotated = remember(text, linkColor, quoteColor) {
+        buildAnnotatedString {
+            text.lines().forEachIndexed { i, line ->
+                if (i > 0) append('\n')
+                val lineStart = length
+                var pos = 0
+                for (match in URL_REGEX.findAll(line)) {
+                    // Trailing punctuation is almost never part of a pasted URL.
+                    val url = match.value.trimEnd('.', ',', ';', ':', '!', '?', ')')
+                    if (url.isEmpty()) continue
+                    val end = match.range.first + url.length
+                    append(line.substring(pos, match.range.first))
+                    withLink(
+                        LinkAnnotation.Url(
+                            url,
+                            TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                        )
+                    ) { append(url) }
+                    pos = end
+                }
+                append(line.substring(pos))
+                if (line.startsWith(">")) {
+                    addStyle(SpanStyle(color = quoteColor, fontStyle = FontStyle.Italic), lineStart, length)
+                }
+            }
+        }
+    }
+    Text(annotated, style = MaterialTheme.typography.bodyLarge)
+}
+
+private val URL_REGEX = Regex("""https?://\S+""")
+
+/**
+ * Build the quoted line for a tapped message: "Name: text" when we know the author
+ * (room posts by signer; DMs by the conversation partner; our own by our node name),
+ * else just the text. Nested quotes are stripped and the result is capped, matching
+ * the on-device UI's convention so both render each other's replies.
+ */
+private fun quoteOf(
+    m: ChatMessage,
+    author: String?,
+    title: String,
+    self: SelfInfo?,
+    isChannel: Boolean,
+): String {
+    val body = m.text.lines().dropWhile { it.startsWith(">") }.joinToString(" ").trim()
+        .ifEmpty { m.text.replace('\n', ' ').trim() }
+    val name = when {
+        author != null -> author
+        !m.incoming -> self?.name?.takeIf { it.isNotBlank() }
+        !isChannel -> title // a DM: the sender is the conversation partner
+        else -> null // channel texts usually embed "Name: …" already
+    }
+    // 80-char cap matches the on-device UI and leaves room for the reply itself
+    // within the firmware's max text length.
+    return (if (name != null) "$name: $body" else body).take(80)
+}
+
+/** The pending reply shown above the compose bar, with a cancel (×) button. */
+@Composable
+private fun ReplyStrip(quote: String, onCancel: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Replying to: $quote",
+                Modifier.weight(1f).padding(start = 12.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            IconButton(onClick = onCancel) {
+                Icon(Icons.Filled.Close, contentDescription = "Cancel reply", modifier = Modifier.size(18.dp))
             }
         }
     }

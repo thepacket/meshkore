@@ -74,6 +74,7 @@ class MeshSession(
     private val link: MeshCoreLink,
     private val scope: CoroutineScope,
     private val chatStore: ChatStore? = null,
+    private val adminPrefs: AdminPrefs? = null,
 ) {
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
@@ -296,9 +297,13 @@ class MeshSession(
         _repeaters.update { it + (prefixHex to f(it[prefixHex] ?: RepeaterSession())) }
     }
 
+    /** Passwords of in-flight login attempts; persisted only once the node accepts them. */
+    private val pendingLoginPw = mutableMapOf<String, String>()
+
     /** Log in to a repeater/room with [password]; result arrives as a LOGIN_SUCCESS/FAIL push. */
     fun loginRepeater(contact: Contact, password: String) {
         val hex = contact.keyPrefixHex
+        pendingLoginPw[hex] = password
         updateRepeater(hex) { it.copy(login = RepeaterLogin.LoggingIn) }
         scope.launch { runCatching { link.send(Requests.sendLogin(contact.publicKey, password)) } }
         // A wrong password usually gets no reply at all (the node won't confirm it), and even a
@@ -306,9 +311,28 @@ class MeshSession(
         scope.launch {
             delay(20_000)
             if (_repeaters.value[hex]?.login == RepeaterLogin.LoggingIn) {
+                pendingLoginPw.remove(hex)
                 updateRepeater(hex) { it.copy(login = RepeaterLogin.Failed) }
             }
         }
+    }
+
+    /** The password this node last accepted (remembered across restarts), or null. */
+    fun savedPassword(contact: Contact): String? = adminPrefs?.password(contact.keyPrefixHex)
+
+    /**
+     * Silently log in with the remembered password, if we have one and no session is already
+     * up (or in progress). Call when a repeater screen / room chat opens; a no-op otherwise.
+     */
+    fun autoLoginIfSaved(contact: Contact) {
+        val login = _repeaters.value[contact.keyPrefixHex]?.login ?: RepeaterLogin.None
+        if (login == RepeaterLogin.LoggedIn || login == RepeaterLogin.LoggingIn) return
+        savedPassword(contact)?.let { loginRepeater(contact, it) }
+    }
+
+    /** Drop this node's remembered password (it stays logged in until logout/expiry). */
+    fun forgetPassword(contact: Contact) {
+        adminPrefs?.forget(contact.keyPrefixHex)
     }
 
     /** Request a repeater/room's status; the reply lands in [repeaters] as its stats. */
@@ -403,6 +427,7 @@ class MeshSession(
         _pathDiscovery.value = emptyMap()
         discoverTag = 0L
         _repeaters.value = emptyMap()
+        pendingLoginPw.clear()
         pendingBinaryReq = null
         _tuning.value = null
         _autoAdd.value = null
@@ -801,10 +826,16 @@ class MeshSession(
             }
             is Incoming.LoginSuccess -> {
                 val hex = f.pubKeyPrefix.toHex()
+                // The node accepted the password — remember it for silent auto-login next time.
+                pendingLoginPw.remove(hex)?.let { adminPrefs?.save(hex, it) }
                 updateRepeater(hex) { it.copy(login = RepeaterLogin.LoggedIn, isAdmin = f.isAdmin) }
                 _contacts.value.firstOrNull { it.keyPrefixHex == hex }?.let { requestRepeaterStatus(it) }
             }
-            is Incoming.LoginFail -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(login = RepeaterLogin.Failed) }
+            is Incoming.LoginFail -> {
+                val hex = f.pubKeyPrefix.toHex()
+                pendingLoginPw.remove(hex)
+                updateRepeater(hex) { it.copy(login = RepeaterLogin.Failed) }
+            }
             is Incoming.Status -> updateRepeater(f.pubKeyPrefix.toHex()) { it.copy(stats = f.stats) }
             is Incoming.BinaryResponse -> pendingBinaryReq?.let { (hex, kind) ->
                 pendingBinaryReq = null

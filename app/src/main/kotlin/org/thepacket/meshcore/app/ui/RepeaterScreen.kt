@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,6 +57,9 @@ fun RepeaterScreen(session: MeshSession, contact: Contact, onBack: () -> Unit) {
     val contacts by session.contacts.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
     val s = repeaters[contact.keyPrefixHex] ?: RepeaterSession()
+
+    // Silent auto-login with the remembered password (saved on the first successful login).
+    LaunchedEffect(contact.keyPrefixHex) { session.autoLoginIfSaved(contact) }
 
     // While logged in and this screen is open, keep the session alive so it doesn't expire when
     // idle. The effect is cancelled on logout or when the screen closes (no airtime otherwise).
@@ -160,8 +164,10 @@ private fun fmtAge(secs: Int): String = when {
 
 @Composable
 private fun LoginForm(session: MeshSession, contact: Contact, s: RepeaterSession) {
-    var password by remember { mutableStateOf("") }
-    Text("Log in to manage this node. Use its admin (or guest) password.",
+    var saved by remember(contact.keyPrefixHex) { mutableStateOf(session.savedPassword(contact)) }
+    var password by remember(contact.keyPrefixHex) { mutableStateOf(saved ?: "") }
+    Text("Log in to manage this node. Use its admin (or guest) password." +
+        if (saved != null) " The remembered password is pre-filled." else "",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
     OutlinedTextField(
@@ -184,6 +190,11 @@ private fun LoginForm(session: MeshSession, contact: Contact, s: RepeaterSession
             "Login failed — wrong password, or no response from the node.",
             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         else -> {}
+    }
+    if (saved != null) {
+        TextButton(onClick = { session.forgetPassword(contact); saved = null }) {
+            Text("Forget saved password")
+        }
     }
 }
 

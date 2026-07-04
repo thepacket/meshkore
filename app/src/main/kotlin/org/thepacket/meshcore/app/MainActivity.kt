@@ -129,6 +129,11 @@ class MainActivity : ComponentActivity() {
                             it.type == org.thepacket.meshcore.protocol.ContactType.ROOM &&
                                 Conversation.dmId(it) == screen.conversationId
                         }
+                        // Silently log back in to the room with the remembered password, so
+                        // posts sync without re-typing it (saved on the first successful login).
+                        LaunchedEffect(screen.conversationId, roomContact?.keyPrefixHex) {
+                            roomContact?.let { vm.session.autoLoginIfSaved(it) }
+                        }
                         ConversationScreen(
                             title = screen.title,
                             messages = messages[screen.conversationId].orEmpty(),
@@ -138,6 +143,7 @@ class MainActivity : ComponentActivity() {
                             roomLogin = roomContact?.let {
                                 repeaters[screen.conversationId]?.login ?: RepeaterLogin.None
                             },
+                            isChannel = screen.conversationId.startsWith("ch:"),
                             onBack = vm::backToHome,
                             onSend = { text -> vm.sendMessage(screen.conversationId, text) },
                             onLogin = { pw -> roomContact?.let { vm.session.loginRepeater(it, pw) } },

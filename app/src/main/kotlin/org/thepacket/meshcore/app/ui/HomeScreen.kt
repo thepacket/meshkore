@@ -423,6 +423,7 @@ private fun ExportCardDialog(card: String, onDismiss: () -> Unit) {
     )
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ChannelDialog(
     title: String,
@@ -438,8 +439,13 @@ private fun ChannelDialog(
     var secretHex by remember { mutableStateOf(initialSecretHex) }
     var confirmReplace by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var showKeyQr by remember { mutableStateOf(false) }
     val cleanSecret = secretHex.trim().replace(" ", "").lowercase()
     val secretValid = cleanSecret.length == 32 && cleanSecret.all { it in "0123456789abcdef" }
+    // Scan a shared channel-key QR (the on-device UI shows the key as base64) into the field.
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let { secretHex = parseChannelKeyHex(it) ?: it.trim() }
+    }
 
     fun commit() = onSave(name.trim(), cleanSecret.hexToBytes())
 
@@ -472,12 +478,20 @@ private fun ChannelDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { secretHex = randomSecretHex() }) { Text("Randomize") }
                     OutlinedButton(
                         onClick = { secretHex = RegionChannels.hashChannelSecret(name.trim()).toHex() },
                         enabled = isHashtag,
                     ) { Text("Key from #name") }
+                    OutlinedButton(onClick = {
+                        scanLauncher.launch(
+                            ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                .setOrientationLocked(false).setBeepEnabled(false)
+                                .setPrompt("Scan a channel-key QR")
+                        )
+                    }) { Text("Scan key") }
+                    OutlinedButton(onClick = { showKeyQr = true }, enabled = secretValid) { Text("Key QR") }
                 }
                 Text("Slot $slot", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 if (onDelete != null) {
@@ -517,6 +531,14 @@ private fun ChannelDialog(
         )
     }
 
+    if (showKeyQr && secretValid) {
+        ChannelKeyQrDialog(
+            name = name.trim().ifBlank { "Channel $slot" },
+            secretHex = cleanSecret,
+            onDismiss = { showKeyQr = false },
+        )
+    }
+
     if (confirmDelete && onDelete != null) {
         val isPublic = slot == 0 || currentAtSlot?.displayName.equals("Public", ignoreCase = true)
         AlertDialog(
@@ -536,6 +558,56 @@ private fun ChannelDialog(
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
+}
+
+/**
+ * The channel's pre-shared key as a scannable QR (base64, the format the on-device UI
+ * shows and accepts), so others can join by scanning — plus both text forms to copy.
+ */
+@Composable
+private fun ChannelKeyQrDialog(name: String, secretHex: String, onDismiss: () -> Unit) {
+    val base64 = remember(secretHex) {
+        java.util.Base64.getEncoder().encodeToString(secretHex.hexToBytes())
+    }
+    val qr = rememberQrBitmap(base64)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Key for “$name”") },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text("Others scan this (or enter the key) to join the channel. " +
+                    "They'll also need the channel name.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                if (qr != null) {
+                    Image(bitmap = qr, contentDescription = "Channel key QR code",
+                        modifier = Modifier.size(220.dp))
+                }
+                SelectionContainer {
+                    Column {
+                        Text(base64, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                        Text(secretHex, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+/**
+ * Normalize a scanned/pasted channel key to 32 hex chars: accepts hex (with spaces)
+ * or a base64 128-bit key (what the on-device UI displays). Null if it's neither.
+ */
+private fun parseChannelKeyHex(content: String): String? {
+    val c = content.trim().replace(" ", "")
+    val asHex = c.lowercase()
+    if (asHex.length == 32 && asHex.all { it in "0123456789abcdef" }) return asHex
+    return runCatching { java.util.Base64.getDecoder().decode(c) }.getOrNull()
+        ?.takeIf { it.size == 16 }?.toHex()
 }
 
 /** A fresh random 128-bit channel key as 32 hex chars. */

@@ -20,6 +20,8 @@ data class ParsedPacket(
     val payloadType: Int,
     val version: Int,
     val payloadLen: Int,
+    /** The type-specific payload bytes (after header/transport/path). */
+    val payload: ByteArray = ByteArray(0),
     val transportCodes: IntArray? = null,
     val pathHashSize: Int = 1,
     val pathHashes: List<Int> = emptyList(),
@@ -36,6 +38,10 @@ data class ParsedPacket(
     val ephemeralPubKey: ByteArray? = null,
     val ackCode: ByteArray? = null,
     val traceTag: Long? = null,
+    /** TRACE only: per-hop SNRs (quarter-dB) accumulated in the path field as it travels. */
+    val traceHopSnrsQ: List<Int> = emptyList(),
+    /** TRACE only: the target route (hop hashes) carried in the payload after tag+auth+flags. */
+    val traceRoute: List<Int> = emptyList(),
 ) {
     val routeName: String get() = RouteType.name(routeType)
     val typeName: String get() = PayloadType.name(payloadType)
@@ -58,12 +64,19 @@ object PacketInspector {
 
         var hashSize = 1
         val hops = ArrayList<Int>()
+        val traceSnrs = ArrayList<Int>()
         if (raw.size > i) {
             val pl = raw[i].toInt() and 0xFF; i++
             val count = pl and 63
             hashSize = (pl ushr 6) + 1
             if (raw.size >= i + count * hashSize) {
-                for (h in 0 until count) hops.add(raw[i + h * hashSize].toInt() and 0xFF)
+                for (h in 0 until count) {
+                    val b = raw[i + h * hashSize].toInt()
+                    // TRACE packets accumulate a signed quarter-dB SNR per hop in the path
+                    // field instead of hop hashes (Mesh.cpp PAYLOAD_TYPE_TRACE handling).
+                    if (type == PayloadType.TRACE) traceSnrs.add(b) // signed int8
+                    else hops.add(b and 0xFF)
+                }
                 i += count * hashSize
             }
         }
@@ -74,6 +87,7 @@ object PacketInspector {
         var mac: ByteArray? = null; var ephem: ByteArray? = null; var ack: ByteArray? = null
         var advKey: ByteArray? = null; var advType: Int? = null; var advName: String? = null
         var advTs: Long? = null; var advLat: Int? = null; var advLon: Int? = null; var traceTag: Long? = null
+        val traceRoute = ArrayList<Int>()
 
         when (type) {
             PayloadType.REQ, PayloadType.RESPONSE, PayloadType.TXT_MSG, PayloadType.PATH ->
@@ -86,7 +100,19 @@ object PacketInspector {
                 if (p.size >= 35) mac = p.copyOfRange(33, 35)
             }
             PayloadType.ACK -> if (p.size >= 4) ack = p.copyOfRange(0, 4)
-            PayloadType.TRACE -> if (p.size >= 4) traceTag = u32(p, 0)
+            PayloadType.TRACE -> if (p.size >= 4) {
+                // tag(4) auth(4) flags(1) then the target route (hop hashes)
+                traceTag = u32(p, 0)
+                if (p.size >= 9) {
+                    val flags = p[8].toInt() and 0xFF
+                    val hsz = 1 shl (flags and 0x03)
+                    var j = 9
+                    while (j < p.size) {
+                        traceRoute.add(p[j].toInt() and 0xFF)
+                        j += hsz
+                    }
+                }
+            }
             PayloadType.ADVERT -> if (p.size >= 36) {
                 advKey = p.copyOfRange(0, 32)
                 advTs = u32(p, 32)
@@ -104,10 +130,12 @@ object PacketInspector {
 
         return ParsedPacket(
             header = header, routeType = route, payloadType = type, version = ver,
-            payloadLen = p.size, transportCodes = transport, pathHashSize = hashSize, pathHashes = hops,
+            payloadLen = p.size, payload = p,
+            transportCodes = transport, pathHashSize = hashSize, pathHashes = hops,
             destHash = destHash, srcHash = srcHash, channelHash = channelHash, mac = mac,
             advertPubKey = advKey, advertType = advType, advertName = advName, advertTimestamp = advTs,
             advertLat = advLat, advertLon = advLon, ephemeralPubKey = ephem, ackCode = ack, traceTag = traceTag,
+            traceHopSnrsQ = traceSnrs, traceRoute = traceRoute,
         )
     }
 
