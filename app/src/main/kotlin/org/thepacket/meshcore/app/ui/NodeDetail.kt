@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.app.haversineKm
+import org.thepacket.meshcore.protocol.AdvertPathInfo
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.Lpp
@@ -73,6 +74,11 @@ fun NodeDetailSheet(
     /** "Get path to node": triggers route discovery; [pathResult] holds the latest reply. */
     onDiscoverPath: (() -> Unit)? = null,
     pathResult: PathDiscoveryResult? = null,
+    /** Cached advert-path lookup (GET_ADVERT_PATH): requested on open, reply in [advertPath]. */
+    onRequestAdvertPath: (() -> Unit)? = null,
+    advertPath: AdvertPathInfo? = null,
+    /** True once the advert-path query has resolved (found or "none stored"). */
+    advertPathLoaded: Boolean = false,
 ) {
     val coords: Pair<Double, Double>? = when {
         isSelf && self != null && (self.advLat != 0 || self.advLon != 0) -> self.advLat / 1e6 to self.advLon / 1e6
@@ -156,6 +162,11 @@ fun NodeDetailSheet(
                     PathSection(pathResult, onDiscoverPath)
                 }
 
+                if (onRequestAdvertPath != null) {
+                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                    AdvertPathSection(advertPath, advertPathLoaded, contact, onRequestAdvertPath)
+                }
+
                 if (onRequestTelemetry != null) {
                     HorizontalDivider(Modifier.padding(vertical = 6.dp))
                     TelemetrySection(telemetry, onRequestTelemetry)
@@ -216,6 +227,48 @@ internal fun PathSection(
 private fun pathLabel(path: List<Int>, hopName: (Int) -> String): String =
     if (path.isEmpty()) "direct (0 hops)"
     else "${path.size} hop(s): " + path.joinToString(" → ", transform = hopName)
+
+/**
+ * The device's cached advert path to this contact (GET_ADVERT_PATH) — the route the contact's
+ * last advert took to reach us, and when. Auto-requested when the sheet opens; instant local
+ * lookup, so a short spinner then either the path or a "none stored" hint.
+ */
+@Composable
+private fun AdvertPathSection(
+    advertPath: AdvertPathInfo?,
+    loaded: Boolean,
+    contact: Contact?,
+    onRequest: () -> Unit,
+    hopName: (Int) -> String = { "0x%02X".format(it) },
+) {
+    var requested by remember(contact?.keyPrefixHex) { mutableStateOf(false) }
+    // Request once when this sheet opens for this contact (unless we already have a fresh result).
+    LaunchedEffect(contact?.keyPrefixHex) {
+        if (!loaded && !requested) { requested = true; onRequest() }
+    }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Advert path", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        OutlinedButton(onClick = { requested = true; onRequest() }) { Text("Refresh") }
+    }
+    when {
+        advertPath != null -> {
+            val hops = advertPath.singleByteHops
+            val label = when {
+                advertPath.hopCount == 0 -> "direct (0 hops)"
+                hops != null -> "${advertPath.hopCount} hop(s): " + hops.joinToString(" → ", transform = hopName)
+                else -> "${advertPath.hopCount} hop(s): ${advertPath.hex}" // multi-byte hop hashes
+            }
+            kvRow("Route", label)
+            if (advertPath.recvTimestamp > 0) kvRow("Advert received", epochStr(advertPath.recvTimestamp))
+        }
+        loaded -> kvHint("No advert path stored on the device for this contact.")
+        else -> kvHint("Looking up the cached advert path…")
+    }
+}
 
 @Composable
 private fun TelemetrySection(telemetry: List<Lpp.Reading>?, onRequest: () -> Unit) {

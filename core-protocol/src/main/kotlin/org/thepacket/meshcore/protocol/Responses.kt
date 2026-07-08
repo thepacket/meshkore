@@ -105,6 +105,12 @@ sealed interface Incoming {
     /** RESP_CODE_CUSTOM_VARS — the device's custom variables / sensor settings. */
     data class CustomVars(val vars: List<CustomVar>) : Incoming
 
+    /** PUSH_CODE_RAW_DATA — a received raw custom-payload packet. */
+    data class RawData(val frame: RawDataFrame) : Incoming
+
+    /** RESP_CODE_ADVERT_PATH — cached advert route to a contact (reply to CMD_GET_ADVERT_PATH). */
+    data class AdvertPath(val info: AdvertPathInfo) : Incoming
+
     /** Any frame not (yet) structurally decoded. [code] is the leading byte. */
     data class Raw(val code: Int, val payload: ByteArray) : Incoming {
         override fun equals(other: Any?) = other is Raw && code == other.code && payload.contentEquals(other.payload)
@@ -207,6 +213,14 @@ object FrameDecoder {
                 Resp.CHANNEL_MSG_RECV, Resp.CHANNEL_MSG_RECV_V3 ->
                     Incoming.Message(parseMessage(r, channel = true, v3 = code == Resp.CHANNEL_MSG_RECV_V3))
                 Resp.CUSTOM_VARS -> Incoming.CustomVars(parseCustomVars(r.restAsString()))
+                Resp.ADVERT_PATH -> {
+                    // recvTimestamp(u32), pathLen(1), path(hopCount*hashSize bytes)
+                    val ts = r.u32()
+                    val pathLen = if (r.remaining > 0) r.u8() else 0
+                    val nBytes = (pathLen and 63) * ((pathLen shr 6) + 1)
+                    val path = r.bytes(minOf(nBytes, r.remaining))
+                    Incoming.AdvertPath(AdvertPathInfo(ts, pathLen, path))
+                }
                 Resp.CHANNEL_INFO -> Incoming.ChannelInfo(r.u8(), r.cstr(32), r.bytes(minOf(16, r.remaining)))
                 Resp.EXPORT_CONTACT -> Incoming.ExportedContact(r.rest())
 
@@ -215,6 +229,13 @@ object FrameDecoder {
                 Push.PATH_UPDATED -> Incoming.PathUpdated(r.bytes(minOf(32, r.remaining)))
                 Push.SEND_CONFIRMED -> Incoming.SendConfirmed(r.u32(), if (r.remaining >= 4) r.u32() else 0)
                 Push.MSG_WAITING -> Incoming.MsgWaiting
+                Push.RAW_DATA -> {
+                    // [snr(i8 x4)][rssi(i8)][reserved(1)][payload...]
+                    val snr = r.i8()
+                    val rssi = r.i8()
+                    r.u8() // reserved (0xFF)
+                    Incoming.RawData(RawDataFrame(snr, rssi, r.rest()))
+                }
                 Push.LOGIN_SUCCESS -> {
                     val perms = if (r.remaining > 0) r.u8() else 0 // permissions / is_admin
                     Incoming.LoginSuccess(r.bytes(minOf(6, r.remaining)), isAdmin = perms != 0)

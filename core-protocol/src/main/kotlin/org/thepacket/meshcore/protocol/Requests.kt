@@ -97,6 +97,14 @@ object Requests {
         FrameWriter().u8(Cmd.GET_CONTACT_BY_KEY).bytes(pubKey.copyOf(32)).build()
 
     /**
+     * Ask for the locally-cached advert path to a contact (reply RESP_CODE_ADVERT_PATH with the
+     * route the contact's advert took to reach us + when, or ERR if none is stored). This is an
+     * instant local-table lookup — no mesh round-trip. Frame: [cmd, reserved(0), pubKey(32)].
+     */
+    fun getAdvertPath(pubKey: ByteArray): ByteArray =
+        FrameWriter().u8(Cmd.GET_ADVERT_PATH).u8(0).bytes(pubKey.copyOf(32)).build()
+
+    /**
      * Export a shareable contact "card" (reply RESP_CODE_EXPORT_CONTACT carrying the raw
      * advert packet). Pass null to export THIS node's own card.
      */
@@ -109,6 +117,16 @@ object Requests {
     /** Import a contact from an exported "card" (the raw advert-packet bytes from [exportContact]). */
     fun importContact(card: ByteArray): ByteArray =
         FrameWriter().u8(Cmd.IMPORT_CONTACT).bytes(card).build()
+
+    /**
+     * Send a raw custom-payload packet (PAYLOAD_TYPE_RAW_CUSTOM) direct along [path] — each byte
+     * a hop hash; an empty path is a zero-hop send to a direct neighbour. [payload] carries the
+     * app's own bytes (custom encryption/format) and must be at least 4 bytes. Flood routing is
+     * NOT supported by the firmware (it replies ERR). Frame: [cmd, path_len(1), path, payload].
+     * The device replies OK once queued, or ERR (e.g. send-table full / flood rejected).
+     */
+    fun sendRawData(path: ByteArray, payload: ByteArray): ByteArray =
+        FrameWriter().u8(Cmd.SEND_RAW_DATA).u8(path.size).bytes(path).bytes(payload).build()
 
     /**
      * Create or replace a channel slot. Frame: [cmd, index(1), name(32), secret(16)].

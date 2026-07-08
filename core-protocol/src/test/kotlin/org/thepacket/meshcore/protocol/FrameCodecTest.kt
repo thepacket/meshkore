@@ -2,6 +2,7 @@ package org.thepacket.meshcore.protocol
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -609,6 +610,65 @@ class FrameCodecTest {
             byteArrayOf(Cmd.SET_CUSTOM_VAR.toByte()) + "gps:1".toByteArray(),
             Requests.setCustomVar("gps", "1"),
         )
+    }
+
+    @Test fun sendRawDataShape() {
+        // Frame: [cmd, path_len(1), path, payload]. Direct with a 2-hop path.
+        val path = byteArrayOf(0x11, 0x22)
+        val payload = byteArrayOf(1, 2, 3, 4, 5)
+        assertArrayEquals(
+            byteArrayOf(Cmd.SEND_RAW_DATA.toByte(), 2, 0x11, 0x22, 1, 2, 3, 4, 5),
+            Requests.sendRawData(path, payload),
+        )
+        // Zero-hop: empty path -> path_len 0.
+        assertArrayEquals(
+            byteArrayOf(Cmd.SEND_RAW_DATA.toByte(), 0, 9, 9, 9, 9),
+            Requests.sendRawData(ByteArray(0), byteArrayOf(9, 9, 9, 9)),
+        )
+    }
+
+    @Test fun decodeRawData() {
+        // PUSH_CODE_RAW_DATA: [snr(i8 x4)][rssi(i8)][reserved(1)][payload...]
+        val frame = FrameWriter().u8(Push.RAW_DATA).u8(20).u8(0xC4).u8(0xFF).bytes("beef".toByteArray()).build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.RawData)
+        val f = (d as Incoming.RawData).frame
+        assertEquals(20, f.snrQ)
+        assertEquals(5.0, f.snrDb, 1e-9)
+        assertEquals(-60, f.rssi) // 0xC4 as signed int8
+        assertEquals("beef", String(f.payload))
+    }
+
+    @Test fun getAdvertPathShape() {
+        // Frame: [cmd, reserved(0), pubKey(32)].
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val f = Requests.getAdvertPath(key)
+        assertEquals(34, f.size)
+        val r = FrameReader(f)
+        assertEquals(Cmd.GET_ADVERT_PATH, r.u8())
+        assertEquals(0, r.u8())
+        assertArrayEquals(key, r.bytes(32))
+    }
+
+    @Test fun decodeAdvertPath() {
+        // [recvTimestamp(u32)][path_len(1)][path]. path_len=3 -> 3 single-byte hops.
+        val frame = FrameWriter().u8(Resp.ADVERT_PATH)
+            .u32(1_700_000_000L).u8(3).bytes(byteArrayOf(0x0A, 0x0B, 0x0C)).build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.AdvertPath)
+        val info = (d as Incoming.AdvertPath).info
+        assertEquals(1_700_000_000L, info.recvTimestamp)
+        assertEquals(3, info.hopCount)
+        assertEquals(1, info.hashSize)
+        assertEquals(listOf(0x0A, 0x0B, 0x0C), info.singleByteHops)
+
+        // 2-byte hop hashes: path_len = (1<<6) | 2 = 66 -> 2 hops × 2 bytes = 4 bytes.
+        val f2 = FrameWriter().u8(Resp.ADVERT_PATH).u32(0).u8(66)
+            .bytes(byteArrayOf(1, 2, 3, 4)).build()
+        val d2 = (FrameDecoder.decode(f2) as Incoming.AdvertPath).info
+        assertEquals(2, d2.hopCount)
+        assertEquals(2, d2.hashSize)
+        assertNull(d2.singleByteHops)
     }
 
     @Test fun setPathHashModeShape() {

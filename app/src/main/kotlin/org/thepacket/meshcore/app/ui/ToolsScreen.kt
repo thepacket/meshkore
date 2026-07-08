@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Route
@@ -27,11 +28,16 @@ import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -60,6 +66,8 @@ import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.DiscoveredNode
 import org.thepacket.meshcore.protocol.SelfInfo
+import org.thepacket.meshcore.protocol.hexToBytes
+import org.thepacket.meshcore.protocol.toHex
 
 @Composable
 fun ToolsContent(
@@ -85,6 +93,7 @@ fun ToolsContent(
         when (open) {
             "trace" -> TraceTool(session, contacts, self) { open = null }
             "discover" -> DiscoverTool(session, self, onShowOnMap) { open = null }
+            "rawdata" -> RawDataTool(session, contacts, ::notify) { open = null }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -105,6 +114,10 @@ fun ToolsContent(
                     "Copy this node's advert card to the clipboard for sharing.") {
                     session.exportSelfAdvert()
                 }
+                ToolRow(Icons.Default.DataObject, "Raw data",
+                    "Send a raw custom-payload packet to a contact, and view received raw data.") {
+                    open = "rawdata"
+                }
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp)) { data ->
@@ -114,6 +127,148 @@ fun ToolsContent(
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 shape = MaterialTheme.shapes.medium,
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RawDataTool(
+    session: MeshSession,
+    contacts: List<Contact>,
+    onNotify: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val received by session.rawData.collectAsStateWithLifecycle()
+    // Recipient list sorted alphabetically by display name (case-insensitive).
+    val sortedContacts = remember(contacts) {
+        contacts.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
+    }
+    var selected by remember(sortedContacts) { mutableStateOf(sortedContacts.firstOrNull()) }
+    var pickerOpen by remember { mutableStateOf(false) }
+    var asHex by remember { mutableStateOf(false) }
+    var input by remember { mutableStateOf("") }
+
+    // Encode the payload from the chosen mode. Null = malformed hex.
+    val payload: ByteArray? = remember(input, asHex) {
+        if (asHex) {
+            val c = input.trim().replace(" ", "").lowercase()
+            if (c.isNotEmpty() && c.length % 2 == 0 && c.all { it in "0123456789abcdef" }) c.hexToBytes() else null
+        } else input.toByteArray(Charsets.UTF_8)
+    }
+    val tooShort = payload != null && payload.size < 4
+    val canSend = selected != null && payload != null && payload.size >= 4
+
+    // Surface the OK/ERR that CMD_SEND_RAW_DATA elicits (routed via settingsResult, label "Raw data").
+    LaunchedEffect(session) {
+        session.settingsResult.collect { r ->
+            if (r.label == "Raw data") onNotify(if (r.ok) "Raw data sent" else "Send failed (flood/queue?)")
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        ToolHeader("Raw data", onBack)
+
+        Text(
+            "Send a PAYLOAD_TYPE_RAW_CUSTOM packet (your own bytes/format) to a contact. Routing is " +
+                "direct only — a known path if we have one, otherwise zero-hop to a direct neighbour. " +
+                "Minimum 4 bytes.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+
+        Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Recipient picker.
+            ExposedDropdownMenuBox(expanded = pickerOpen, onExpandedChange = { pickerOpen = it }) {
+                OutlinedTextField(
+                    value = selected?.let { it.name.ifBlank { it.keyPrefixHex } } ?: "No contacts",
+                    onValueChange = {}, readOnly = true, label = { Text("Recipient") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(pickerOpen) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                )
+                ExposedDropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }) {
+                    sortedContacts.forEach { c ->
+                        DropdownMenuItem(
+                            text = { Text(c.name.ifBlank { c.keyPrefixHex }) },
+                            onClick = { selected = c; pickerOpen = false },
+                        )
+                    }
+                }
+            }
+            selected?.let { c ->
+                val routing = if (c.outPathLen in 0..63)
+                    "direct · ${c.outPathLen}-hop path" else "zero-hop (direct neighbour only)"
+                Text("Routing: $routing", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Hex payload")
+                Switch(checked = asHex, onCheckedChange = { asHex = it })
+            }
+            OutlinedTextField(
+                value = input, onValueChange = { input = it },
+                label = { Text(if (asHex) "Payload (hex)" else "Payload (text)") },
+                singleLine = false, maxLines = 4, modifier = Modifier.fillMaxWidth(),
+                // Only flag an error once the user has typed something invalid/too short.
+                isError = input.isNotBlank() && (payload == null || tooShort),
+            )
+            // Neutral helper while empty/valid; red only for a real problem after typing.
+            val (helper, isErr) = when {
+                input.isBlank() ->
+                    (if (asHex) "Enter hex bytes — at least 4 bytes (8 hex chars)."
+                    else "Enter text — at least 4 bytes.") to false
+                payload == null -> "Invalid hex (need an even number of 0-9 a-f)." to true
+                tooShort -> "${payload.size}/4 bytes — need at least 4." to true
+                else -> "${payload.size} bytes ✓" to false
+            }
+            Text(helper, style = MaterialTheme.typography.labelSmall,
+                color = if (isErr) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            Button(
+                onClick = {
+                    val c = selected; val p = payload
+                    if (c != null && p != null) { session.sendRawData(c, p); input = "" }
+                },
+                enabled = canSend, modifier = Modifier.fillMaxWidth(),
+            ) { Text("Send raw data") }
+        }
+
+        // Received raw frames.
+        Text("Received (${received.size})", style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        if (received.isEmpty()) {
+            Text("No raw data received yet.", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(horizontal = 12.dp))
+        } else {
+            received.forEach { RawDataRow(it) }
+        }
+    }
+}
+
+@Composable
+private fun RawDataRow(frame: org.thepacket.meshcore.protocol.RawDataFrame) {
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("SNR ${frame.snrDb} dB · RSSI ${frame.rssi}", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), fontFamily = FontFamily.Monospace)
+                Text("${frame.payload.size} B", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+            Text(frame.hex, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+            val ascii = frame.payload.map { b ->
+                val v = b.toInt() and 0xFF
+                if (v in 32..126) v.toChar() else '·'
+            }.joinToString("")
+            Text(ascii, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), fontFamily = FontFamily.Monospace)
         }
     }
 }

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.update
 import kotlin.random.Random
 import kotlinx.coroutines.launch
 import org.thepacket.meshcore.ble.MeshCoreLink
+import org.thepacket.meshcore.protocol.AdvertPathInfo
 import org.thepacket.meshcore.protocol.AutoAddConfig
 import org.thepacket.meshcore.protocol.BattAndStorage
 import org.thepacket.meshcore.protocol.Contact
@@ -39,6 +40,7 @@ import org.thepacket.meshcore.protocol.TxtType
 import org.thepacket.meshcore.protocol.hexToBytes
 import org.thepacket.meshcore.protocol.toHex
 import org.thepacket.meshcore.protocol.RadioStats
+import org.thepacket.meshcore.protocol.RawDataFrame
 import org.thepacket.meshcore.protocol.Requests
 import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.SelfInfo
@@ -148,6 +150,10 @@ class MeshSession(
     private val _heard = MutableStateFlow<List<HeardEntry>>(emptyList())
     val heard: StateFlow<List<HeardEntry>> = _heard.asStateFlow()
 
+    /** Received raw custom-payload packets (PUSH_CODE_RAW_DATA), newest first, capped. */
+    private val _rawData = MutableStateFlow<List<RawDataFrame>>(emptyList())
+    val rawData: StateFlow<List<RawDataFrame>> = _rawData.asStateFlow()
+
     /** Managed repeater/room sessions, keyed by the node's 6-byte key-prefix hex. */
     private val _repeaters = MutableStateFlow<Map<String, RepeaterSession>>(emptyMap())
     val repeaters: StateFlow<Map<String, RepeaterSession>> = _repeaters.asStateFlow()
@@ -179,6 +185,13 @@ class MeshSession(
     private val _battStorage = MutableStateFlow<BattAndStorage?>(null)
     val battStorage: StateFlow<BattAndStorage?> = _battStorage.asStateFlow()
 
+    /**
+     * Device clock offset in ms (device epoch − phone epoch) at the last GET_DEVICE_TIME reply.
+     * Add it to the phone's current time to render a live device clock; null until first read.
+     */
+    private val _deviceTimeOffsetMs = MutableStateFlow<Long?>(null)
+    val deviceTimeOffsetMs: StateFlow<Long?> = _deviceTimeOffsetMs.asStateFlow()
+
     /** Rolling in-app debug log (newest last, capped) for the Debug Logs viewer. */
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
@@ -198,6 +211,15 @@ class MeshSession(
     /** Discovered routes per node, keyed by 6-byte key-prefix hex (from "Get path to node"). */
     private val _pathDiscovery = MutableStateFlow<Map<String, PathDiscoveryResult>>(emptyMap())
     val pathDiscovery: StateFlow<Map<String, PathDiscoveryResult>> = _pathDiscovery.asStateFlow()
+
+    /**
+     * Cached advert paths per contact, keyed by 6-byte key-prefix hex (from GET_ADVERT_PATH).
+     * A present null value means "queried, none stored on the device".
+     */
+    private val _advertPaths = MutableStateFlow<Map<String, AdvertPathInfo?>>(emptyMap())
+    val advertPaths: StateFlow<Map<String, AdvertPathInfo?>> = _advertPaths.asStateFlow()
+    /** Key-prefix hex of the in-flight GET_ADVERT_PATH (its reply carries no key to match on). */
+    @Volatile private var pendingAdvertPathKey: String? = null
 
     /** Emitted after each settings write (OK/ERR) for UI feedback. */
     private val _settingsResult = MutableSharedFlow<SettingsResult>(extraBufferCapacity = 8)
@@ -257,6 +279,7 @@ class MeshSession(
         scope.launch { link.send(Requests.getBattAndStorage()) }
         scope.launch { link.send(Requests.selfTelemetry()) }
         scope.launch { link.send(Requests.getCustomVars()) }
+        scope.launch { link.send(Requests.getDeviceTime()) }
         startStatsPolling()
     }
 
@@ -282,6 +305,27 @@ class MeshSession(
         scope.launch {
             runCatching { link.send(Requests.sendPathDiscoveryReq(pubKey)) }
                 .onFailure { dbg("tx pathDiscovery FAILED: ${it.message}") }
+        }
+    }
+
+    /**
+     * Ask for the device's cached advert path to [contact] — the route its last advert took to
+     * reach us, and when. Instant local lookup; the reply lands in [advertPaths] keyed by the
+     * contact's 6-byte key-prefix hex (a null entry means the device has no path stored).
+     */
+    fun requestAdvertPath(contact: Contact) {
+        val hex = contact.keyPrefixHex
+        pendingAdvertPathKey = hex
+        scope.launch {
+            runCatching { link.send(Requests.getAdvertPath(contact.publicKey)) }
+            // A "not found" comes back as a generic ERR (no key); clear the pending marker after a
+            // short grace period so a stale request can't misattribute a later reply.
+            delay(3_000)
+            if (pendingAdvertPathKey == hex) {
+                pendingAdvertPathKey = null
+                // Record "none" if nothing arrived, so the UI can distinguish loading from empty.
+                if (!_advertPaths.value.containsKey(hex)) _advertPaths.update { it + (hex to null) }
+            }
         }
     }
 
@@ -444,8 +488,11 @@ class MeshSession(
         _packetStats.value = null
         _noiseHistory.value = emptyList()
         _heard.value = emptyList()
+        _rawData.value = emptyList()
         _discovered.value = emptyList()
         _pathDiscovery.value = emptyMap()
+        _advertPaths.value = emptyMap()
+        pendingAdvertPathKey = null
         discoverTag = 0L
         _repeaters.value = emptyMap()
         pendingLoginPw.clear()
@@ -456,6 +503,7 @@ class MeshSession(
         _deviceInfo.value = null
         _customVars.value = emptyList()
         _battStorage.value = null
+        _deviceTimeOffsetMs.value = null
         _telemetry.value = emptyList()
         _contactTelemetry.value = emptyMap()
         _traceResult.value = null
@@ -553,7 +601,13 @@ class MeshSession(
 
     fun applyPathHashMode(mode: Int) = applySetting("Path-hash mode", Requests.setPathHashMode(mode))
 
-    fun syncTimeFromPhone() = applySetting("Time", Requests.setDeviceTime(System.currentTimeMillis() / 1000))
+    fun syncTimeFromPhone() {
+        applySetting("Time", Requests.setDeviceTime(System.currentTimeMillis() / 1000))
+        refreshDeviceTime() // read it back so the displayed clock reflects the write
+    }
+
+    /** Re-read the device clock; the result lands in [deviceTimeOffsetMs]. */
+    fun refreshDeviceTime() = scope.launch { runCatching { link.send(Requests.getDeviceTime()) } }.let {}
 
     /** Re-fetch the device's custom variables (they land in [customVars]). */
     fun refreshCustomVars() = scope.launch { runCatching { link.send(Requests.getCustomVars()) } }.let {}
@@ -813,6 +867,18 @@ class MeshSession(
         _importedContact.tryEmit(contact.keyPrefixHex)
     }
 
+    /**
+     * Send a raw custom-payload packet to [contact]. Routing is direct: if we know the contact's
+     * outbound path we send along it, otherwise we fall back to a zero-hop send (only reaches a
+     * direct neighbour — the firmware doesn't support flooding raw data). [payload] must be at
+     * least 4 bytes. The OK/ERR reply surfaces on [settingsResult] with the label "Raw data".
+     */
+    fun sendRawData(contact: Contact, payload: ByteArray) {
+        val pathLen = if (contact.outPathLen in 0..63) contact.outPathLen else 0
+        val path = if (pathLen > 0) contact.outPath.copyOf(pathLen) else ByteArray(0)
+        applySetting("Raw data", Requests.sendRawData(path, payload))
+    }
+
     // ---- channel management ----------------------------------------------
 
     /** Create or replace a channel slot (optimistically reflect it locally). */
@@ -990,6 +1056,7 @@ class MeshSession(
             is Incoming.Device -> _deviceInfo.value = f.info
             is Incoming.CustomVars -> _customVars.value = f.vars
             is Incoming.Battery -> _battStorage.value = f.info
+            is Incoming.DeviceTime -> _deviceTimeOffsetMs.value = f.epochSecs * 1000 - System.currentTimeMillis()
             is Incoming.Telemetry -> {
                 // Self telemetry (auto-requested on connect) carries our own prefix; anything
                 // else is a remote contact's reply to requestTelemetry().
@@ -1002,6 +1069,10 @@ class MeshSession(
             }
             is Incoming.Trace -> _traceResult.value = f.result
             is Incoming.PathDiscovery -> _pathDiscovery.update { it + (f.result.keyPrefixHex to f.result) }
+            is Incoming.AdvertPath -> pendingAdvertPathKey?.let { key ->
+                pendingAdvertPathKey = null
+                _advertPaths.update { it + (key to f.info) }
+            }
             is Incoming.NodeDiscovered -> if (f.node.tag == discoverTag) {
                 // Replace any prior entry for this node so its SNR refreshes; no duplicates.
                 _discovered.update { list ->
@@ -1019,6 +1090,7 @@ class MeshSession(
                     lastAdvertSnrQ = f.log.snrQ; lastAdvertRssi = f.log.rssi
                 }
             }
+            is Incoming.RawData -> _rawData.update { (listOf(f.frame) + it).take(MAX_PACKETS) }
             is Incoming.AdvertHeard -> upsertHeardByKey(f.publicKey)
             is Incoming.NewAdvert -> {
                 // fold the new node into the contact list, and persist it on the device

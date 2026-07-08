@@ -133,6 +133,7 @@ private fun AllContactsList(
     val deviceContacts by session.contacts.collectAsStateWithLifecycle()
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
+    val advertPaths by session.advertPaths.collectAsStateWithLifecycle()
     var detail by remember { mutableStateOf<Contact?>(null) }
     var query by remember { mutableStateOf("") }
     var confirmSend by remember { mutableStateOf(false) }
@@ -255,6 +256,9 @@ private fun AllContactsList(
             onShowOnMap = onShowOnMap,
             onDiscoverPath = { session.discoverPath(c.publicKey) },
             pathResult = pathDiscovery[c.keyPrefixHex],
+            onRequestAdvertPath = { session.requestAdvertPath(c) },
+            advertPath = advertPaths[c.keyPrefixHex],
+            advertPathLoaded = advertPaths.containsKey(c.keyPrefixHex),
         )
     }
 
@@ -320,6 +324,7 @@ private fun ContactsList(
     var typeFilter by remember { mutableStateOf(0) }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
+    val advertPaths by session.advertPaths.collectAsStateWithLifecycle()
     val unread by session.unread.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
@@ -463,6 +468,9 @@ private fun ContactsList(
             onShowOnMap = onShowOnMap,
             onDiscoverPath = { session.discoverPath(c.publicKey) },
             pathResult = pathDiscovery[c.keyPrefixHex],
+            onRequestAdvertPath = { session.requestAdvertPath(c) },
+            advertPath = advertPaths[c.keyPrefixHex],
+            advertPathLoaded = advertPaths.containsKey(c.keyPrefixHex),
         )
     }
 

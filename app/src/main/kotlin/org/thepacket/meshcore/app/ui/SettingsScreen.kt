@@ -50,6 +50,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.NotifyPrefs
 import org.thepacket.meshcore.protocol.AutoAdd
@@ -378,11 +382,33 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         }
 
         // ---- Time ----
+        val timeOffset by session.deviceTimeOffsetMs.collectAsStateWithLifecycle()
         SectionCard("Time") {
+            // A 1-Hz tick drives the live device clock (phone time + device offset).
+            var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(Unit) { while (true) { nowMs = System.currentTimeMillis(); delay(1_000) } }
+            val offset = timeOffset
+            if (offset != null) {
+                KeyVal("Device time", fmtDateTime(nowMs + offset))
+                val driftSecs = offset / 1000
+                val drift = when {
+                    kotlin.math.abs(driftSecs) < 2 -> "In sync with this phone."
+                    driftSecs > 0 -> "${driftSecs}s ahead of this phone."
+                    else -> "${-driftSecs}s behind this phone."
+                }
+                Text(drift, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            } else {
+                Text("Reading device time…", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
             Text("Set the device clock from this phone's current time.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            SaveRow(label = "Sync now") { session.syncTimeFromPhone() }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { session.refreshDeviceTime() }) { Text("Refresh") }
+                Button(onClick = { session.syncTimeFromPhone() }) { Text("Sync now") }
+            }
         }
     }
 
@@ -557,6 +583,10 @@ private fun SaveRow(label: String = "Save", onClick: () -> Unit) {
 
 private fun toast(ctx: android.content.Context, msg: String) =
     Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+
+/** Device clock as a local date-time string, e.g. "2026-07-08 14:03:27". */
+private fun fmtDateTime(ms: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(ms))
 
 /**
  * Read a one-shot fix from the phone's GPS/network provider. Caller must hold ACCESS_FINE_LOCATION.
