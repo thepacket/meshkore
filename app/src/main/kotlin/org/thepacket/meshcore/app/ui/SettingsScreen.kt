@@ -87,6 +87,7 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
     val autoAdd by session.autoAdd.collectAsStateWithLifecycle()
     val allowedRepeat by session.allowedRepeatFreqs.collectAsStateWithLifecycle()
     val deviceInfo by session.deviceInfo.collectAsStateWithLifecycle()
+    val customVars by session.customVars.collectAsStateWithLifecycle()
     val battStorage by session.battStorage.collectAsStateWithLifecycle()
     val contacts by session.contacts.collectAsStateWithLifecycle()
     val channels by session.channels.collectAsStateWithLifecycle()
@@ -325,6 +326,28 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             SaveRow { session.applyPathHashMode(pathHash) }
         }
 
+        // ---- Device variables (firmware custom vars / sensor settings) ----
+        SectionCard("Device variables") {
+            Text(
+                "Firmware-defined variables such as sensor and GPS settings. The names are " +
+                    "reported by the device; edit a value and Save to write it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            if (customVars.isEmpty()) {
+                Text("This device reports no custom variables.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            } else {
+                customVars.forEach { v ->
+                    CustomVarRow(v.name, v.value) { nv -> session.setCustomVar(v.name, nv) }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                OutlinedButton(onClick = { session.refreshCustomVars() }) { Text("Refresh") }
+            }
+        }
+
         // ---- Device info ----
         SectionCard("Device info") {
             deviceInfo?.let { di ->
@@ -463,6 +486,23 @@ private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Un
                 color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
             content()
         }
+    }
+}
+
+/** One editable custom variable: a labelled value field + a Save enabled only when it changed. */
+@Composable
+private fun CustomVarRow(name: String, value: String, onSave: (String) -> Unit) {
+    var text by remember(value) { mutableStateOf(value) }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = text, onValueChange = { text = it }, label = { Text(name) },
+            singleLine = true, modifier = Modifier.weight(1f),
+        )
+        Button(onClick = { onSave(text) }, enabled = text != value) { Text("Save") }
     }
 }
 

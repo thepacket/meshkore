@@ -204,6 +204,19 @@ object Requests {
 
     fun getAutoAddConfig(): ByteArray = FrameWriter().u8(Cmd.GET_AUTOADD_CONFIG).build()
 
+    /**
+     * Fetch the device's custom variables (firmware "sensor settings"). Reply is
+     * RESP_CODE_CUSTOM_VARS carrying a `name:value,name:value,…` string.
+     */
+    fun getCustomVars(): ByteArray = FrameWriter().u8(Cmd.GET_CUSTOM_VARS).build()
+
+    /**
+     * Set one custom variable. Frame: [cmd, "key:value"] as raw UTF-8 (no terminator);
+     * the firmware splits on the first ':'. Replies OK, or ERR if the key is unknown.
+     */
+    fun setCustomVar(key: String, value: String): ByteArray =
+        FrameWriter().u8(Cmd.SET_CUSTOM_VAR).str("$key:$value").build()
+
     /** Query the frequencies (kHz ranges) on which this firmware permits client-repeat. */
     fun getAllowedRepeatFreq(): ByteArray = FrameWriter().u8(Cmd.GET_ALLOWED_REPEAT_FREQ).build()
 

@@ -23,6 +23,7 @@ import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.DiscoveredNode
 import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.CoreStats
+import org.thepacket.meshcore.protocol.CustomVar
 import org.thepacket.meshcore.protocol.DeviceInfo
 import org.thepacket.meshcore.protocol.Incoming
 import org.thepacket.meshcore.protocol.Lpp
@@ -171,6 +172,10 @@ class MeshSession(
     private val _deviceInfo = MutableStateFlow<DeviceInfo?>(null)
     val deviceInfo: StateFlow<DeviceInfo?> = _deviceInfo.asStateFlow()
 
+    /** The device's custom variables ("sensor settings"), as name→value pairs. */
+    private val _customVars = MutableStateFlow<List<CustomVar>>(emptyList())
+    val customVars: StateFlow<List<CustomVar>> = _customVars.asStateFlow()
+
     private val _battStorage = MutableStateFlow<BattAndStorage?>(null)
     val battStorage: StateFlow<BattAndStorage?> = _battStorage.asStateFlow()
 
@@ -251,6 +256,7 @@ class MeshSession(
         scope.launch { link.send(Requests.deviceQuery()) }
         scope.launch { link.send(Requests.getBattAndStorage()) }
         scope.launch { link.send(Requests.selfTelemetry()) }
+        scope.launch { link.send(Requests.getCustomVars()) }
         startStatsPolling()
     }
 
@@ -448,6 +454,7 @@ class MeshSession(
         _autoAdd.value = null
         _allowedRepeatFreqs.value = emptyList()
         _deviceInfo.value = null
+        _customVars.value = emptyList()
         _battStorage.value = null
         _telemetry.value = emptyList()
         _contactTelemetry.value = emptyMap()
@@ -547,6 +554,21 @@ class MeshSession(
     fun applyPathHashMode(mode: Int) = applySetting("Path-hash mode", Requests.setPathHashMode(mode))
 
     fun syncTimeFromPhone() = applySetting("Time", Requests.setDeviceTime(System.currentTimeMillis() / 1000))
+
+    /** Re-fetch the device's custom variables (they land in [customVars]). */
+    fun refreshCustomVars() = scope.launch { runCatching { link.send(Requests.getCustomVars()) } }.let {}
+
+    /**
+     * Set one custom variable. The write elicits an OK/ERR (surfaced via [settingsResult]);
+     * we then re-read the vars so [customVars] reflects what the firmware actually stored.
+     */
+    fun setCustomVar(name: String, value: String) {
+        pendingSettings.addLast("Variable “$name”")
+        scope.launch {
+            link.send(Requests.setCustomVar(name, value))
+            link.send(Requests.getCustomVars())
+        }
+    }
 
     // ---- extra tools ------------------------------------------------------
 
@@ -966,6 +988,7 @@ class MeshSession(
             is Incoming.AutoAdd -> _autoAdd.value = f.config
             is Incoming.AllowedRepeatFreqs -> _allowedRepeatFreqs.value = f.rangesKhz
             is Incoming.Device -> _deviceInfo.value = f.info
+            is Incoming.CustomVars -> _customVars.value = f.vars
             is Incoming.Battery -> _battStorage.value = f.info
             is Incoming.Telemetry -> {
                 // Self telemetry (auto-requested on connect) carries our own prefix; anything

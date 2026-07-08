@@ -586,6 +586,31 @@ class FrameCodecTest {
         assertEquals(5, a.config.maxHops)
     }
 
+    @Test fun decodeCustomVars() {
+        // Firmware joins pairs with ',' and separates name/value with the first ':'.
+        val frame = FrameWriter().u8(Resp.CUSTOM_VARS).str("gps:1,gps_interval:900,name:Node A").build()
+        val d = FrameDecoder.decode(frame)
+        assertTrue(d is Incoming.CustomVars)
+        val vars = (d as Incoming.CustomVars).vars
+        assertEquals(3, vars.size)
+        assertEquals(CustomVar("gps", "1"), vars[0])
+        assertEquals(CustomVar("gps_interval", "900"), vars[1])
+        assertEquals(CustomVar("name", "Node A"), vars[2])
+
+        // Empty payload -> no vars (device reports none).
+        val empty = FrameDecoder.decode(FrameWriter().u8(Resp.CUSTOM_VARS).build())
+        assertTrue(empty is Incoming.CustomVars)
+        assertTrue((empty as Incoming.CustomVars).vars.isEmpty())
+    }
+
+    @Test fun setCustomVarShape() {
+        // Frame: [cmd] + raw "key:value" UTF-8, no terminator (firmware splits on first ':').
+        assertArrayEquals(
+            byteArrayOf(Cmd.SET_CUSTOM_VAR.toByte()) + "gps:1".toByteArray(),
+            Requests.setCustomVar("gps", "1"),
+        )
+    }
+
     @Test fun setPathHashModeShape() {
         assertArrayEquals(byteArrayOf(Cmd.SET_PATH_HASH_MODE.toByte(), 0, 2), Requests.setPathHashMode(2))
     }

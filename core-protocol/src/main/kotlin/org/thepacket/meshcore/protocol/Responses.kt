@@ -102,6 +102,9 @@ sealed interface Incoming {
     data class AutoAdd(val config: AutoAddConfig) : Incoming
     data class Device(val info: DeviceInfo) : Incoming
 
+    /** RESP_CODE_CUSTOM_VARS — the device's custom variables / sensor settings. */
+    data class CustomVars(val vars: List<CustomVar>) : Incoming
+
     /** Any frame not (yet) structurally decoded. [code] is the leading byte. */
     data class Raw(val code: Int, val payload: ByteArray) : Incoming {
         override fun equals(other: Any?) = other is Raw && code == other.code && payload.contentEquals(other.payload)
@@ -203,6 +206,7 @@ object FrameDecoder {
                     Incoming.Message(parseMessage(r, channel = false, v3 = code == Resp.CONTACT_MSG_RECV_V3))
                 Resp.CHANNEL_MSG_RECV, Resp.CHANNEL_MSG_RECV_V3 ->
                     Incoming.Message(parseMessage(r, channel = true, v3 = code == Resp.CHANNEL_MSG_RECV_V3))
+                Resp.CUSTOM_VARS -> Incoming.CustomVars(parseCustomVars(r.restAsString()))
                 Resp.CHANNEL_INFO -> Incoming.ChannelInfo(r.u8(), r.cstr(32), r.bytes(minOf(16, r.remaining)))
                 Resp.EXPORT_CONTACT -> Incoming.ExportedContact(r.rest())
 
@@ -244,6 +248,16 @@ object FrameDecoder {
         } catch (_: IndexOutOfBoundsException) {
             // Truncated/unexpected frame — preserve raw rather than crashing the link.
             Incoming.Raw(code, frame.copyOfRange(1, frame.size))
+        }
+    }
+
+    // RESP_CODE_CUSTOM_VARS: a "name:value,name:value,…" string (firmware joins pairs with ','
+    // and separates name/value with the first ':'). Empty payload = no vars.
+    private fun parseCustomVars(s: String): List<CustomVar> {
+        if (s.isBlank()) return emptyList()
+        return s.split(',').mapNotNull { pair ->
+            val i = pair.indexOf(':')
+            if (i < 0) null else CustomVar(pair.substring(0, i).trim(), pair.substring(i + 1))
         }
     }
 
