@@ -18,6 +18,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -25,6 +26,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PacketStats
@@ -32,6 +35,7 @@ import org.thepacket.meshcore.protocol.RadioStats
 
 @Composable
 fun StatsContent(
+    session: MeshSession,
     radio: RadioStats?,
     core: CoreStats?,
     packets: PacketStats?,
@@ -47,6 +51,7 @@ fun StatsContent(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        AddressBookCard(session)
         TelemetryCard(telemetry, onRefreshTelemetry)
         NoiseCard(noiseHistory, radio?.noiseFloor)
         radio?.let { RadioCard(it) }
@@ -54,6 +59,30 @@ fun StatsContent(
         packets?.let { PacketsCard(it) }
         if (radio == null && core == null) {
             Text("Reading stats…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        }
+    }
+}
+
+@Composable
+private fun AddressBookCard(session: MeshSession) {
+    val allContacts by session.allContacts.collectAsStateWithLifecycle()
+    val deviceContacts by session.contacts.collectAsStateWithLifecycle()
+    val channels by session.channels.collectAsStateWithLifecycle()
+    val deviceInfo by session.deviceInfo.collectAsStateWithLifecycle()
+    val maxContacts = deviceInfo?.maxContacts?.takeIf { it > 0 }
+    val maxChannels = deviceInfo?.maxChannels?.takeIf { it > 0 }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Contacts & channels", style = MaterialTheme.typography.titleMedium)
+            StatRow("Address book", "${allContacts.size}")
+            StatRow(
+                "Device contacts",
+                if (maxContacts != null) "${deviceContacts.size} / $maxContacts" else "${deviceContacts.size}",
+            )
+            StatRow(
+                "Device channels",
+                if (maxChannels != null) "${channels.size} / $maxChannels" else "${channels.size}",
+            )
         }
     }
 }

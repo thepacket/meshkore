@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -105,17 +106,146 @@ fun HomeContent(
             Box(Modifier.padding(12.dp)) { DeviceHeader(it) }
         }
         TabRow(selectedTabIndex = tab) {
-            Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Contacts") })
-            Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Channels") })
+            Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("All contacts") })
+            Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Device contacts") })
+            Tab(selected = tab == 2, onClick = { onTab(2) }, text = { Text("Channels") })
         }
         when (tab) {
-            0 -> ContactsList(session, self, contacts, onOpenConversation, onShowOnMap)
+            0 -> AllContactsList(session, self, onOpenConversation, onShowOnMap)
+            1 -> ContactsList(session, self, contacts, onOpenConversation, onShowOnMap)
             else -> ChannelsList(session, channels, onOpenConversation)
         }
     }
 
     exportedCard?.let { card ->
         ExportCardDialog(card) { exportedCard = null }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AllContactsList(
+    session: MeshSession,
+    self: SelfInfo?,
+    onOpen: (String, String) -> Unit,
+    onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+) {
+    val ctx = LocalContext.current
+    val allContacts by session.allContacts.collectAsStateWithLifecycle()
+    val deviceContacts by session.contacts.collectAsStateWithLifecycle()
+    val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
+    val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
+    var detail by remember { mutableStateOf<Contact?>(null) }
+    var query by remember { mutableStateOf("") }
+    var confirmSend by remember { mutableStateOf(false) }
+
+    // Toast the outcome of a push once it completes.
+    LaunchedEffect(session) {
+        session.contactPushResult.collect { n ->
+            val msg = if (n == 0) "All contacts already on device"
+            else "Sent $n contact${if (n == 1) "" else "s"} to device"
+            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Keys already present on the connected device — so we can show what a push would add.
+    val onDeviceKeys = remember(deviceContacts) { deviceContacts.map { it.publicKey.toHex() }.toSet() }
+    val missingCount = remember(allContacts, onDeviceKeys) {
+        allContacts.count { it.publicKey.toHex() !in onDeviceKeys }
+    }
+
+    val sorted = remember(allContacts) {
+        allContacts.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
+    }
+    val filtered = remember(sorted, query) {
+        val q = query.trim()
+        if (q.isEmpty()) sorted
+        else sorted.filter {
+            it.name.contains(q, ignoreCase = true) || it.keyPrefixHex.contains(q, ignoreCase = true)
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+            OutlinedButton(
+                onClick = { confirmSend = true },
+                enabled = self != null && missingCount > 0,
+            ) {
+                Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(if (missingCount > 0) "  Send $missingCount to device" else "  All on device")
+            }
+        }
+        if (allContacts.isNotEmpty()) {
+            CompactSearchField(
+                query = query,
+                onQueryChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            )
+        }
+        if (allContacts.isEmpty()) {
+            EmptyHint("No contacts collected yet.\nConnect to a device to build your address book.")
+        } else if (filtered.isEmpty()) {
+            EmptyHint("No contacts match \"$query\".")
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(filtered, key = { it.keyPrefixHex }) { c ->
+                    val onDevice = c.publicKey.toHex() in onDeviceKeys
+                    ConversationRow(
+                        icon = if (c.isRepeater) Icons.Default.Router else Icons.Default.Person,
+                        tint = nameColor(c.name.ifBlank { c.keyPrefixHex }),
+                        title = c.name.ifBlank { c.keyPrefixHex },
+                        subtitle = contactTypeLabel(c.type) + if (onDevice) " · on device" else "",
+                        onClick = { detail = c },
+                        onLongClick = { detail = c },
+                    )
+                }
+            }
+        }
+    }
+
+    detail?.let { c ->
+        NodeDetailSheet(
+            name = c.name.ifBlank { c.keyPrefixHex },
+            type = c.type,
+            isSelf = false,
+            contact = c,
+            heard = null,
+            self = self,
+            onDismiss = { detail = null },
+            onShare = { session.shareContact(c); detail = null },
+            onResetPath = { session.resetPath(c) },
+            onExport = { session.exportContact(c); detail = null },
+            onRemove = { session.removeContact(c); session.forgetAggregateContact(c); detail = null },
+            onRequestTelemetry = { session.requestTelemetry(c) },
+            telemetry = contactTelemetry[c.keyPrefixHex],
+            onManage = null,
+            onShowOnMap = onShowOnMap,
+            onDiscoverPath = { session.discoverPath(c.publicKey) },
+            pathResult = pathDiscovery[c.keyPrefixHex],
+        )
+    }
+
+    if (confirmSend) {
+        AlertDialog(
+            onDismissRequest = { confirmSend = false },
+            title = { Text("Send contacts to device?") },
+            text = {
+                Text(
+                    "Add $missingCount contact${if (missingCount == 1) "" else "s"} from your address " +
+                        "book to the connected device. Contacts it already has are left untouched.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmSend = false; session.pushAllContactsToDevice() }) {
+                    Text("Send")
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmSend = false }) { Text("Cancel") } },
+        )
     }
 }
 

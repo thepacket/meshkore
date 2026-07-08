@@ -75,6 +75,7 @@ class MeshSession(
     private val scope: CoroutineScope,
     private val chatStore: ChatStore? = null,
     private val adminPrefs: AdminPrefs? = null,
+    private val contactStore: ContactStore? = null,
 ) {
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
@@ -88,6 +89,18 @@ class MeshSession(
 
     private val _contacts = MutableStateFlow<List<Contact>>(emptyList())
     val contacts: StateFlow<List<Contact>> = _contacts.asStateFlow()
+
+    /**
+     * The aggregate address book: the deduped union of contacts seen on every device this
+     * app has connected to. Persisted, so it survives disconnects/restarts and can be pushed
+     * onto a freshly-connected device. Unlike [contacts], it is NOT cleared on disconnect.
+     */
+    private val _allContacts = MutableStateFlow<List<Contact>>(emptyList())
+    val allContacts: StateFlow<List<Contact>> = _allContacts.asStateFlow()
+
+    /** Emitted after a "send all contacts to device" push completes, carrying the count sent. */
+    private val _contactPushResult = MutableSharedFlow<Int>(extraBufferCapacity = 4)
+    val contactPushResult: SharedFlow<Int> = _contactPushResult.asSharedFlow()
 
     private val _channels = MutableStateFlow<List<ChannelEntry>>(emptyList())
     val channels: StateFlow<List<ChannelEntry>> = _channels.asStateFlow()
@@ -224,6 +237,7 @@ class MeshSession(
             }
         }
         chatStore?.loadUnread()?.let { if (it.isNotEmpty()) _unread.value = it }
+        contactStore?.load()?.let { if (it.isNotEmpty()) _allContacts.value = it }
         scope.launch { link.incoming.collect(::onFrame) }
     }
 
@@ -402,6 +416,7 @@ class MeshSession(
             lastMod = System.currentTimeMillis() / 1000,
         )
         _contacts.update { list -> (list + c).sortedByDescending { it.lastAdvert } }
+        mergeIntoAggregate(listOf(c))
         scope.launch { runCatching { link.send(Requests.addUpdateContact(c)) } }
     }
 
@@ -623,6 +638,91 @@ class MeshSession(
 
     // ---- contact management ----------------------------------------------
 
+    /**
+     * Fold [incoming] contacts into the persistent aggregate address book. Dedup is by full
+     * public key; when a key is already known we pick the better record: a contact that carries
+     * a friendly name always wins over a nameless one for the same key (a name never regresses
+     * to blank), and only when both are named-or-both-blank do we fall back to the newer
+     * [Contact.lastMod]. Persists if anything changed.
+     */
+    private fun mergeIntoAggregate(incoming: List<Contact>) {
+        if (incoming.isEmpty()) return
+        val byKey = LinkedHashMap<String, Contact>()
+        _allContacts.value.forEach { byKey[it.publicKey.toHex()] = it }
+        var changed = false
+        for (c in incoming) {
+            val k = c.publicKey.toHex()
+            val existing = byKey[k]
+            if (existing == null) {
+                byKey[k] = c
+                changed = true
+            } else {
+                val cHasName = c.name.isNotBlank()
+                val exHasName = existing.name.isNotBlank()
+                val merged = when {
+                    cHasName && !exHasName -> c        // a name replaces a nameless entry
+                    !cHasName && exHasName -> existing // never let a name regress to blank
+                    else -> if (c.lastMod >= existing.lastMod) c else existing // both named/both blank
+                }
+                if (!sameContactRecord(merged, existing)) {
+                    byKey[k] = merged
+                    changed = true
+                }
+            }
+        }
+        if (changed) {
+            val list = byKey.values.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
+            _allContacts.value = list
+            contactStore?.save(list)
+        }
+    }
+
+    /** True if two contacts carry identical stored fields (Contact.equals only checks the key). */
+    private fun sameContactRecord(a: Contact, b: Contact): Boolean =
+        a.name == b.name && a.type == b.type && a.lastMod == b.lastMod &&
+            a.lastAdvert == b.lastAdvert && a.gpsLat == b.gpsLat && a.gpsLon == b.gpsLon &&
+            a.outPathLen == b.outPathLen
+
+    /**
+     * Push the entire aggregate address book onto the connected device, skipping contacts the
+     * device already has (matched by public key). New contacts are added with their path reset
+     * so the device re-learns routing. Emits the count sent on [contactPushResult] when done.
+     */
+    fun pushAllContactsToDevice() {
+        val onDevice = _contacts.value
+        val toPush = _allContacts.value.filterNot { c ->
+            onDevice.any { it.publicKey.contentEquals(c.publicKey) }
+        }
+        scope.launch {
+            var sent = 0
+            for (c in toPush) {
+                // Path is device-specific; reset it so the target device floods until it learns one.
+                val fresh = c.copy(outPathLen = 0xFF, outPath = ByteArray(64))
+                runCatching { link.send(Requests.addUpdateContact(fresh)) }
+                    .onSuccess { sent++ }
+                    .onFailure { dbg("pushContacts failed for ${c.keyPrefixHex}: ${it.message}") }
+                delay(60) // pace the writes so the link/firmware queue doesn't overflow
+            }
+            // Reflect the newly-added contacts locally without waiting for a full resync.
+            if (sent > 0) {
+                _contacts.update { list ->
+                    (list + toPush).distinctBy { it.publicKey.toHex() }
+                        .sortedByDescending { it.lastAdvert }
+                }
+            }
+            _contactPushResult.tryEmit(sent)
+        }
+    }
+
+    /** Drop a contact from the persistent aggregate address book (does not touch the device). */
+    fun forgetAggregateContact(c: Contact) {
+        val list = _allContacts.value.filterNot { it.publicKey.contentEquals(c.publicKey) }
+        if (list.size != _allContacts.value.size) {
+            _allContacts.value = list
+            contactStore?.save(list)
+        }
+    }
+
     /** Remove a contact from the device store (optimistically drop it locally too). */
     fun removeContact(c: Contact) {
         _contacts.update { list -> list.filterNot { it.publicKey.contentEquals(c.publicKey) } }
@@ -687,6 +787,7 @@ class MeshSession(
         _contacts.update { list ->
             (list.filterNot { it.publicKey.contentEquals(key) } + contact).sortedByDescending { it.lastAdvert }
         }
+        mergeIntoAggregate(listOf(contact))
         _importedContact.tryEmit(contact.keyPrefixHex)
     }
 
@@ -790,6 +891,8 @@ class MeshSession(
             is Incoming.ContactEntry -> contactAccumulator.add(f.contact)
             is Incoming.ContactsEnd -> {
                 _contacts.value = contactAccumulator.sortedByDescending { it.lastAdvert }
+                // Fold this device's contacts into the persistent cross-device address book.
+                mergeIntoAggregate(contactAccumulator.toList())
                 contactAccumulator.clear()
                 // Drop any locally-stored room history: rooms are server-owned, so we show only
                 // what the room delivers this session. (Room posts arrive later, after login.)
@@ -902,6 +1005,7 @@ class MeshSession(
                     if (isNewToUs) (list + f.contact).sortedByDescending { it.lastAdvert } else list
                 }
                 if (isNewToUs) scope.launch { runCatching { link.send(Requests.addUpdateContact(f.contact)) } }
+                mergeIntoAggregate(listOf(f.contact))
                 upsertHeard(
                     HeardEntry(
                         pubKeyHex = f.contact.publicKey.toHex(),

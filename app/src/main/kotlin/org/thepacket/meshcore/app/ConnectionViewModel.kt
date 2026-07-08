@@ -162,7 +162,9 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     fun openConversation(id: String, title: String) {
         session.setActiveConversation(id)
         // Remember which sub-tab this conversation belongs to, so leaving it returns there.
-        val chatsTab = if (id.startsWith("ch:")) 1 else 0
+        // Channels are the 3rd Chats sub-tab (index 2); for a DM keep the current contacts
+        // sub-tab (All contacts = 0 or Device contacts = 1) the user opened it from.
+        val chatsTab = if (id.startsWith("ch:")) 2 else _ui.value.chatsTab.coerceIn(0, 1)
         _ui.update { it.copy(screen = Screen.Conversation(id, title), chatsTab = chatsTab) }
     }
 
