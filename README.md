@@ -23,7 +23,7 @@ MITM-protected nodes. Seven tabs — **Chats · Heard · Packets · Stats · Map
   **every device you've connected to**; one tap **pushes the whole book** to the connected device,
   skipping duplicates.
 - **Contact actions** (long-press) — share, reset path, export, remove, request telemetry, show
-  on map, get path to node, and cached **advert path**; import from card or **QR** (`meshcore://`),
+  on map, get path to node, and cached **advert path**; import from card or **QR**,
   and share a contact as a QR.
 - **Channels** — create / edit (name + 128-bit key) / delete with slot guards; protected **Public**
   channel with one-tap restore; add community channels by **region catalog** or **`#hashtag`** key
