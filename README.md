@@ -6,120 +6,66 @@ devices over **BLE** — an alternative to the official app, built natively in
 
 ## Features
 
-Connect to a MeshCore device over BLE — including **PIN/passkey pairing** for
-MITM-protected nodes (you're prompted for the device PIN on the first connection).
-The app has seven tabs — **Chats · Heard · Packets · Stats · Map · Tools · Settings**:
+Connect to a MeshCore device over BLE, including **PIN/passkey pairing** for
+MITM-protected nodes. Seven tabs — **Chats · Heard · Packets · Stats · Map · Tools · Settings**.
 
-- **Messaging (Chats)** — split into **Contacts** and **Channels** sub-tabs. Group
-  **channels** and **direct messages** with speech-bubble threads, per-name colours,
-  per-message **timestamps**, inbound SNR, and outbound **delivery status**
-  (sending → sent → delivered ✓, via the ACK path); a failed send shows **tap-to-retry**.
-  **Tap a message to reply** — the quote goes over the air as a leading `> …` line (the
-  same convention as MeshKore's sibling on-device UI, so both render each other's
-  replies), quoted lines display dimmed, and **http(s) links** in messages are tappable.
-  Each conversation row carries an **unread badge**, and leaving a chat returns you to the
-  sub-tab you came from. DM/channel conversations (and unread counts) are **persisted**
-  locally across reconnects/restarts, and **background notifications** alert you to new
-  messages while the app is closed (toggle per-type in Settings). The contact list has a
-  **search** box.
-  - **Contact management** — long-press a contact for **Share**, **Reset path**,
-    **Export**, **Remove**, **Request telemetry** (the battery/sensor data the node
-    chooses to share), **Show on map**, and **Get path to node** (multi-hop route
-    discovery). **Import** a contact from an exported card, or via **QR** — share a
-    contact as a scannable QR (the official `meshcore://` URL) and add one by scanning.
-  - **Channel management** — **create**, **edit** (name + 128-bit key, with a randomize
-    button) and **delete** channels, with guards against overwriting an occupied slot.
-    The well-known **Public** channel (slot 0) is **protected** from edits/deletion and
-    can be **restored** in one tap if it drifts. **Add region** pulls the community
-    channel catalog (by country) and lets you tick which to add; or type a community
-    **`#hashtag` channel** name and the key is derived automatically. A channel's key can
-    be **shared as a QR** (base64, the on-device UI's format) and **scanned to join** —
-    the key field accepts a scanned/pasted base64 or hex key.
-  - **Room servers** — open a room contact to read and post to its **shared board**;
-    **log in** (blank password for public rooms) so the room delivers posts, each shown
-    with its **author**. (Room history lives on the server, not locally.)
-  - **Repeater management** — tap a repeater to **log in** and view its **live status**
-    (battery, uptime, packet counts, airtime, signal, dups, errors), **owner/firmware**,
-    **neighbours** and **access list**, and run **admin / CLI commands** in a console.
-  - **Remembered passwords** — a password a repeater/room accepts is stored and reused
-    for **silent auto-login** the next time you open that node's management screen or
-    room chat (with auto status fetch); a "Forget saved password" button clears it.
-- **Heard** — recently-heard stations with a signal-graded dot, timestamp, SNR/RSSI, age,
-  and distance (when both ends advertise GPS); tap for full details, **Show on map**, and
-  **Get path to node**.
-- **Packet monitor** — live decoded RX feed (source/destination, payload/route type,
-  SNR, RSSI, length, receive time + elapsed/distance) with a **filter box** (by node,
-  path, or type); tap for the full packet breakdown + raw hex, with **Show on map** and
-  **Get path to node** when the source is known. The breakdown decodes as deep as the
-  radio allows: **channel messages are decrypted** when the key is ours (MAC-checked,
-  showing sender + text + sent time; "not our channel" otherwise), an **ACK is matched
-  to our own outbound message** when its code corresponds, **trace packets** show their
-  per-hop SNRs and target route, adverts show the **sender's clock skew** and position
-  **distance**, and every packet gets a **link margin** (SNR above the SF's demod floor),
-  an **airtime estimate**, and a **flood-rebroadcast count** (copies of the same payload
-  in the log).
-- **Statistics** — rolling **noise-floor graph**, radio (RSSI/SNR/airtime), device
-  (battery/uptime/queue) and packet counters, plus **My Telemetry** (all of this node's
-  telemetry channels), polled from the device.
-- **Map** — OpenStreetMap view plotting nodes that advertise a position: round markers,
-  towers for repeaters, colour-by-type, screen-space **clustering** with count pills,
-  node labels, and a tap-for-details sheet (all fields copy-pasteable). A node's info
-  panel can recentre the map on it via **Show on map**. The map is read-only and never
-  reads the phone's GPS on its own — position is only read from the phone on an explicit
-  tap in Settings.
-- **Tools**
-  - **Trace path** — build a route by tapping repeaters on the live map (a node may
-    repeat); long-press a node for its details. Sends the trace and shows the
-    **per-hop receive SNR** on return.
-  - **Discover nodes** — send a one-hop discovery request and list the nearby nodes
-    that answer (**companions, repeaters, room servers and sensors**), each tagged with
-    its type and signal, sorted by signal strength. New nodes are added to contacts.
-    Discover and Clear are user-driven, with an optional 60-second auto-refresh.
-  - **Advertise** — announce this node **zero-hop** (direct neighbours) or **flood-routed**
-    (whole mesh), or copy its advert **card to the clipboard** for sharing.
-- **Settings** — full editable device config: node name, **region presets**, frequency,
-  bandwidth, SF, coding rate, **TX power**, **client-repeat** (with a guard for the
-  firmware's allowed repeat frequencies), advertised **position** (typed, picked on a map,
-  or read from the **phone's GPS on an explicit tap**), network/telemetry options, tuning,
-  auto-add, experimental **path-hash size**; plus **Device info**, config/app-data
-  **export & import**, debug logs, reboot and factory reset.
+**Chats**
 
-Runtime permissions: Bluetooth (and, on Android ≤ 11, location for BLE scanning); plus
-**location** — requested only when you tap "Use current location" to set this node's
-position — and **camera**, only when scanning a contact QR.
+- Three sub-tabs — **All contacts**, **Device contacts**, **Channels**; each contact list
+  filters by type (**Clients · Repeaters · Room Servers · Sensors**) with live counts and a search box.
+- Direct messages and channel threads: speech bubbles, per-name colours, per-message
+  timestamps, inbound SNR, and **delivery status** (sending → sent → delivered ✓) with tap-to-retry.
+- **Tap a message to reply** — the `> …` quote interops with MeshKore's on-device UI; tappable
+  `http(s)` links; per-conversation **unread badges**.
+- Conversations and unread counts **persist** across reconnects/restarts; **background
+  notifications** for new messages (per-type toggle).
+- **Aggregate address book** — All contacts is the deduped, persistent union of contacts from
+  **every device you've connected to**; one tap **pushes the whole book** to the connected device,
+  skipping duplicates.
+- **Contact actions** (long-press) — share, reset path, export, remove, request telemetry, show
+  on map, get path to node, and cached **advert path**; import from card or **QR** (`meshcore://`),
+  and share a contact as a QR.
+- **Channels** — create / edit (name + 128-bit key) / delete with slot guards; protected **Public**
+  channel with one-tap restore; add community channels by **region catalog** or **`#hashtag`** key
+  derivation; share/scan a channel key as a base64 QR.
+- **Room servers** — log in and read/post the shared board, with per-post authors.
+- **Repeater management** — log in; live status (battery/uptime/packets/airtime/signal/dups/errors);
+  owner/firmware; neighbours; access list; admin/CLI console.
+- **Remembered passwords** — silent auto-login to repeaters/rooms you've authenticated to.
 
-> **Not yet implemented:** dedicated support for **Sensor** nodes (environmental
-> readings / telemetry history) and a room **member-list** view. **Room servers**
-> are supported — log in, then read and post to the shared board, with per-post
-> authors. Note that a room server needs a correct clock (an RTC, or a clock set
-> via its CLI) to relay posts between members.
+**Heard** — recently-heard stations with a signal-graded dot, SNR/RSSI, age, and distance; tap for
+details, show on map, and get path to node.
 
-## Status
+**Packet monitor** — live decoded RX feed with a filter box; deep decode: channel **decrypt**,
+**ACK match** to your own sends, trace per-hop SNRs, advert **clock skew** + distance, **link margin**,
+airtime estimate, and flood-rebroadcast count.
 
-| Area | State |
-|---|---|
-| Connect + device config (full editable settings) | ✅ done, hardware-validated |
-| BLE PIN / passkey pairing (MITM companions) | ✅ done, hardware-validated |
-| Messaging (DMs + channels + timestamps + delivery status + resend + persistence) | ✅ done, hardware-validated |
-| Tap-to-reply quoting (`> …` interop with the on-device UI) + tappable links | 🆕 implemented, needs on-air validation |
-| Unread badges (persisted) | ✅ done, hardware-validated |
-| Background message notifications | ✅ done, hardware-validated |
-| Contact management (search / share / reset-path / remove / export-import) | ✅ done, hardware-validated |
-| QR contact share + scan (`meshcore://` URL) | ✅ done, hardware-validated |
-| Channel management (create / edit / delete) | ✅ done, hardware-validated |
-| Channel key QR (share as base64 QR / scan to join) | 🆕 implemented, needs on-air validation |
-| Public channel protect + restore | ✅ done, hardware-validated |
-| Region channels (community catalog) + `#hashtag` key derivation | ✅ done |
-| Instrumentation (packet monitor / noise / stats / telemetry) | ✅ done, hardware-validated |
-| Deep packet decode (channel decrypt / ACK match / trace SNRs / clock skew / link margin / airtime / rebroadcasts / filter) | 🆕 implemented, needs on-air validation |
-| Remote telemetry (request a contact's telemetry) | ✅ done, hardware-validated |
-| Path discovery ("Get path to node") | ⚠️ implemented; needs a responsive node/firmware to return a route |
-| Last-heard | ✅ done, hardware-validated |
-| Map (node positions + show-on-map) + GPS position (explicit) | ✅ done, hardware-validated |
-| Tools — trace path (on map) + node discovery + advertise | ✅ done, hardware-validated |
-| Repeater management (remote login / status / owner / neighbours / ACL / CLI) | ✅ done, hardware-validated |
-| Room servers (log in, read + post the shared board, per-post authors) | ✅ done, hardware-validated |
-| Remembered admin/room passwords + silent auto-login | 🆕 implemented, needs on-air validation |
+**Statistics** — rolling noise-floor graph; radio / device / packet counters; a **Contacts & channels**
+card (address-book size, device contacts and channels vs. capacity); and **My Telemetry**.
+
+**Map** — OpenStreetMap plot of positioned nodes drawn from the full address book: typed markers,
+screen-space clustering, labels, and a tap-for-details sheet. Read-only — never reads the phone's GPS
+on its own.
+
+**Tools**
+
+- **Trace path** — build a route by tapping repeaters on the map; see per-hop receive SNR.
+- **Discover nodes** — one-hop discovery listing nearby companions/repeaters/rooms/sensors.
+- **Advertise** — zero-hop, flood-routed, or copy this node's advert card to the clipboard.
+- **Raw data** — send a raw custom-payload packet (text/hex) to a contact, and view received raw frames.
+
+**Settings** — full editable device config: node name, region presets, frequency / bandwidth / SF /
+coding rate, TX power, client-repeat (with allowed-frequency guard), advertised position (typed, picked
+on a map, or phone GPS on an explicit tap), network & telemetry, tuning, auto-add, path-hash size,
+**device variables** (firmware custom vars / sensor settings), and a live **device clock** (drift vs. the
+phone + one-tap sync); plus device info, config/app-data export & import, debug logs, reboot, and factory reset.
+
+Runtime permissions: Bluetooth (and, on Android ≤ 11, location for BLE scanning); **location** — only
+when you tap "Use current location" to set this node's position; and **camera**, only when scanning a QR.
+
+> **Not yet implemented:** dedicated support for **Sensor** nodes (environmental readings /
+> telemetry history) and a room **member-list** view. Note that a room server needs a correct
+> clock (an RTC, or a clock set via its CLI) to relay posts between members.
 
 ## Module layout
 
