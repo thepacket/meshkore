@@ -39,6 +39,7 @@ fun MainScaffold(
     self: SelfInfo?,
     channels: List<ChannelEntry>,
     contacts: List<Contact>,
+    allContacts: List<Contact>,
     packets: List<RxLog>,
     heard: List<org.thepacket.meshcore.app.HeardEntry>,
     radio: RadioStats?,
@@ -122,7 +123,7 @@ fun MainScaffold(
             MainTab.Heard -> HeardContent(heard, contacts, self, session, m, onShowOnMap)
             MainTab.Packets -> PacketMonitorContent(packets, contacts, self, session, m, onShowOnMap)
             MainTab.Stats -> StatsContent(session, radio, core, packetStats, noiseHistory, telemetry, session::refreshTelemetry, m)
-            MainTab.Map -> MapContent(self, contacts, heard, m, focus = mapFocus, onFocusConsumed = onMapFocusConsumed)
+            MainTab.Map -> MapContent(self, allContacts, heard, m, focus = mapFocus, onFocusConsumed = onMapFocusConsumed)
             MainTab.Tools -> ToolsContent(session, self, m, onShowOnMap)
             MainTab.Settings -> SettingsContent(session, self, m)
         }

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -102,9 +103,6 @@ fun HomeContent(
     }
 
     Column(modifier.fillMaxSize()) {
-        self?.let {
-            Box(Modifier.padding(12.dp)) { DeviceHeader(it) }
-        }
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("All contacts") })
             Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Device contacts") })
@@ -138,6 +136,8 @@ private fun AllContactsList(
     var detail by remember { mutableStateOf<Contact?>(null) }
     var query by remember { mutableStateOf("") }
     var confirmSend by remember { mutableStateOf(false) }
+    // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
+    var typeFilter by remember { mutableStateOf(0) }
 
     // Toast the outcome of a push once it completes.
     LaunchedEffect(session) {
@@ -154,8 +154,24 @@ private fun AllContactsList(
         allContacts.count { it.publicKey.toHex() !in onDeviceKeys }
     }
 
-    val sorted = remember(allContacts) {
-        allContacts.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
+    // Split the address book by type once, so each filter tab shows a live count.
+    val clients = remember(allContacts) {
+        allContacts.filter {
+            it.type != ContactType.REPEATER && it.type != ContactType.ROOM && it.type != ContactType.SENSOR
+        }
+    }
+    val repeaters = remember(allContacts) { allContacts.filter { it.type == ContactType.REPEATER } }
+    val rooms = remember(allContacts) { allContacts.filter { it.type == ContactType.ROOM } }
+    val sensors = remember(allContacts) { allContacts.filter { it.type == ContactType.SENSOR } }
+    val byType = when (typeFilter) {
+        1 -> repeaters
+        2 -> rooms
+        3 -> sensors
+        else -> clients
+    }
+
+    val sorted = remember(byType) {
+        byType.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
     }
     val filtered = remember(sorted, query) {
         val q = query.trim()
@@ -175,6 +191,14 @@ private fun AllContactsList(
                 Text(if (missingCount > 0) "  Send $missingCount to device" else "  All on device")
             }
         }
+        TypeFilterRow(
+            selected = typeFilter,
+            onSelect = { typeFilter = it },
+            clientCount = clients.size,
+            repeaterCount = repeaters.size,
+            roomCount = rooms.size,
+            sensorCount = sensors.size,
+        )
         if (allContacts.isNotEmpty()) {
             CompactSearchField(
                 query = query,
@@ -182,10 +206,15 @@ private fun AllContactsList(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             )
         }
+        val typeLabel = when (typeFilter) {
+            1 -> "repeaters"; 2 -> "room servers"; 3 -> "sensors"; else -> "clients"
+        }
         if (allContacts.isEmpty()) {
             EmptyHint("No contacts collected yet.\nConnect to a device to build your address book.")
+        } else if (byType.isEmpty()) {
+            EmptyHint("No $typeLabel in your address book.")
         } else if (filtered.isEmpty()) {
-            EmptyHint("No contacts match \"$query\".")
+            EmptyHint("No $typeLabel match \"$query\".")
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -249,6 +278,31 @@ private fun AllContactsList(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun TypeFilterRow(
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    clientCount: Int,
+    repeaterCount: Int,
+    roomCount: Int,
+    sensorCount: Int,
+) {
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(selected = selected == 0, onClick = { onSelect(0) },
+            label = { Text("Clients ($clientCount)") })
+        FilterChip(selected = selected == 1, onClick = { onSelect(1) },
+            label = { Text("Repeaters ($repeaterCount)") })
+        FilterChip(selected = selected == 2, onClick = { onSelect(2) },
+            label = { Text("Room Servers ($roomCount)") })
+        FilterChip(selected = selected == 3, onClick = { onSelect(3) },
+            label = { Text("Sensors ($sensorCount)") })
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ContactsList(
@@ -262,6 +316,8 @@ private fun ContactsList(
     var manage by remember { mutableStateOf<Contact?>(null) }
     var showImport by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
+    var typeFilter by remember { mutableStateOf(0) }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val unread by session.unread.collectAsStateWithLifecycle()
@@ -273,9 +329,25 @@ private fun ContactsList(
         return
     }
 
+    // Split by type once, so each filter tab shows a live count.
+    val clients = remember(contacts) {
+        contacts.filter {
+            it.type != ContactType.REPEATER && it.type != ContactType.ROOM && it.type != ContactType.SENSOR
+        }
+    }
+    val repeaters = remember(contacts) { contacts.filter { it.type == ContactType.REPEATER } }
+    val rooms = remember(contacts) { contacts.filter { it.type == ContactType.ROOM } }
+    val sensors = remember(contacts) { contacts.filter { it.type == ContactType.SENSOR } }
+    val byType = when (typeFilter) {
+        1 -> repeaters
+        2 -> rooms
+        3 -> sensors
+        else -> clients
+    }
+
     // Sorted alphabetically by display name (case-insensitive).
-    val sorted = remember(contacts) {
-        contacts.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
+    val sorted = remember(byType) {
+        byType.sortedBy { (it.name.ifBlank { it.keyPrefixHex }).lowercase() }
     }
 
     // Filter by the search query against display name and key prefix.
@@ -291,8 +363,19 @@ private fun ContactsList(
     // newly-added row can land off-screen. Scroll to the imported contact once it appears
     // in the (possibly not-yet-recomposed) sorted list.
     val filteredState = rememberUpdatedState(filtered)
+    val contactsState = rememberUpdatedState(contacts)
     LaunchedEffect(session) {
         session.importedContact.collect { key ->
+            // Make sure the imported contact's filter tab is active, else its row is hidden
+            // and the scroll below would wait forever.
+            contactsState.value.firstOrNull { it.keyPrefixHex == key }?.let { c ->
+                typeFilter = when (c.type) {
+                    ContactType.REPEATER -> 1
+                    ContactType.ROOM -> 2
+                    ContactType.SENSOR -> 3
+                    else -> 0
+                }
+            }
             // Wait until the imported row is present in the data, then let the rebuilt list
             // fully settle before scrolling — scrolling mid-rebuild uses stale measurements
             // and the LazyColumn re-anchors to the previously-first key, hiding the new row.
@@ -309,6 +392,14 @@ private fun ContactsList(
                 Text("  Import contact")
             }
         }
+        TypeFilterRow(
+            selected = typeFilter,
+            onSelect = { typeFilter = it },
+            clientCount = clients.size,
+            repeaterCount = repeaters.size,
+            roomCount = rooms.size,
+            sensorCount = sensors.size,
+        )
         if (contacts.isNotEmpty()) {
             CompactSearchField(
                 query = query,
@@ -316,10 +407,15 @@ private fun ContactsList(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             )
         }
+        val typeLabel = when (typeFilter) {
+            1 -> "repeaters"; 2 -> "room servers"; 3 -> "sensors"; else -> "clients"
+        }
         if (contacts.isEmpty()) {
             EmptyHint("No contacts synced yet.")
+        } else if (byType.isEmpty()) {
+            EmptyHint("No $typeLabel on this device.")
         } else if (filtered.isEmpty()) {
-            EmptyHint("No contacts match \"$query\".")
+            EmptyHint("No $typeLabel match \"$query\".")
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -788,17 +884,6 @@ private fun CompactSearchField(query: String, onQueryChange: (String) -> Unit, m
             )
         },
     )
-}
-
-@Composable
-private fun DeviceHeader(self: SelfInfo) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(self.name.ifBlank { "(unnamed node)" }, style = MaterialTheme.typography.titleLarge)
-            Text("${self.freqMhz} MHz · ${self.bwKhz} kHz · SF${self.radioSf} · 4/${self.radioCr} · ${self.txPower} dBm",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-        }
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)

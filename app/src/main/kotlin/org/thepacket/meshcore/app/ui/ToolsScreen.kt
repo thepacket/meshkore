@@ -154,12 +154,13 @@ private fun ToolHeader(title: String, onBack: () -> Unit) {
 private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfInfo?, onBack: () -> Unit) {
     val result by session.traceResult.collectAsStateWithLifecycle()
     val heard by session.heard.collectAsStateWithLifecycle()
+    val allContacts by session.allContacts.collectAsStateWithLifecycle()
     val selected = remember { mutableStateListOf<Contact>() } // ordered path (duplicates allowed)
     val r = result
 
     Box(Modifier.fillMaxSize()) {
         MapContent(
-            self = self, contacts = contacts, heard = heard,
+            self = self, contacts = allContacts, heard = heard,
             modifier = Modifier.fillMaxSize(),
             traceMode = true,
             tracePath = selected,
