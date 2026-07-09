@@ -671,6 +671,26 @@ class FrameCodecTest {
         assertNull(d2.singleByteHops)
     }
 
+    @Test fun privateKeyExportImportShapes() {
+        assertArrayEquals(byteArrayOf(Cmd.EXPORT_PRIVATE_KEY.toByte()), Requests.exportPrivateKey())
+
+        val id = ByteArray(64) { it.toByte() }
+        val f = Requests.importPrivateKey(id)
+        assertEquals(65, f.size)
+        assertEquals(Cmd.IMPORT_PRIVATE_KEY, f[0].toInt() and 0xFF)
+        assertArrayEquals(id, f.copyOfRange(1, 65))
+    }
+
+    @Test fun decodePrivateKey() {
+        val id = ByteArray(64) { (it + 1).toByte() }
+        val d = FrameDecoder.decode(FrameWriter().u8(Resp.PRIVATE_KEY).bytes(id).build())
+        assertTrue(d is Incoming.PrivateKey)
+        assertArrayEquals(id, (d as Incoming.PrivateKey).identity)
+
+        // A firmware without key export replies DISABLED.
+        assertTrue(FrameDecoder.decode(byteArrayOf(Resp.DISABLED.toByte())) is Incoming.Disabled)
+    }
+
     @Test fun setPathHashModeShape() {
         assertArrayEquals(byteArrayOf(Cmd.SET_PATH_HASH_MODE.toByte(), 0, 2), Requests.setPathHashMode(2))
     }

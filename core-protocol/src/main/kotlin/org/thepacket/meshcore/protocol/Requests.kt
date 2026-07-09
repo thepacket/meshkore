@@ -119,6 +119,21 @@ object Requests {
         FrameWriter().u8(Cmd.IMPORT_CONTACT).bytes(card).build()
 
     /**
+     * Export this node's identity key (reply RESP_CODE_PRIVATE_KEY carrying the 64-byte
+     * private(32)+public(32) blob, or RESP_CODE_DISABLED if the firmware wasn't built with
+     * key export enabled). Frame: [cmd] only.
+     */
+    fun exportPrivateKey(): ByteArray = FrameWriter().u8(Cmd.EXPORT_PRIVATE_KEY).build()
+
+    /**
+     * Replace this node's identity with [identity64] — the 64-byte private(32)+public(32) blob
+     * from [exportPrivateKey]. Replies OK (device reloads contacts to re-derive shared secrets),
+     * ERR (invalid key / save failed), or RESP_CODE_DISABLED. Frame: [cmd, identity(64)].
+     */
+    fun importPrivateKey(identity64: ByteArray): ByteArray =
+        FrameWriter().u8(Cmd.IMPORT_PRIVATE_KEY).bytes(identity64.copyOf(64)).build()
+
+    /**
      * Send a raw custom-payload packet (PAYLOAD_TYPE_RAW_CUSTOM) direct along [path] — each byte
      * a hop hash; an empty path is a zero-hop send to a direct neighbour. [payload] carries the
      * app's own bytes (custom encryption/format) and must be at least 4 bytes. Flood routing is

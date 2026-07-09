@@ -111,6 +111,12 @@ sealed interface Incoming {
     /** RESP_CODE_ADVERT_PATH — cached advert route to a contact (reply to CMD_GET_ADVERT_PATH). */
     data class AdvertPath(val info: AdvertPathInfo) : Incoming
 
+    /** RESP_CODE_PRIVATE_KEY — this node's 64-byte private(32)+public(32) identity blob. */
+    data class PrivateKey(val identity: ByteArray) : Incoming {
+        override fun equals(other: Any?) = other is PrivateKey && identity.contentEquals(other.identity)
+        override fun hashCode() = identity.contentHashCode()
+    }
+
     /** Any frame not (yet) structurally decoded. [code] is the leading byte. */
     data class Raw(val code: Int, val payload: ByteArray) : Incoming {
         override fun equals(other: Any?) = other is Raw && code == other.code && payload.contentEquals(other.payload)
@@ -212,6 +218,7 @@ object FrameDecoder {
                     Incoming.Message(parseMessage(r, channel = false, v3 = code == Resp.CONTACT_MSG_RECV_V3))
                 Resp.CHANNEL_MSG_RECV, Resp.CHANNEL_MSG_RECV_V3 ->
                     Incoming.Message(parseMessage(r, channel = true, v3 = code == Resp.CHANNEL_MSG_RECV_V3))
+                Resp.PRIVATE_KEY -> Incoming.PrivateKey(r.bytes(minOf(64, r.remaining)))
                 Resp.CUSTOM_VARS -> Incoming.CustomVars(parseCustomVars(r.restAsString()))
                 Resp.ADVERT_PATH -> {
                     // recvTimestamp(u32), pathLen(1), path(hopCount*hashSize bytes)

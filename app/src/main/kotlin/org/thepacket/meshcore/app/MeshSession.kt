@@ -53,6 +53,14 @@ import java.util.ArrayDeque
 /** Result of an applied settings write, for UI feedback. */
 data class SettingsResult(val label: String, val ok: Boolean)
 
+/** Outcome of a private-key export request. */
+sealed interface PrivateKeyExport {
+    /** The 64-byte private(32)+public(32) identity, as 128 hex chars. */
+    data class Ready(val hex: String) : PrivateKeyExport
+    /** The firmware was not built with key export enabled (replied DISABLED). */
+    data object Unsupported : PrivateKeyExport
+}
+
 enum class RepeaterLogin { None, LoggingIn, LoggedIn, Failed }
 
 /** Live state of a managed repeater/room session (keyed by 6-byte key-prefix hex). */
@@ -232,6 +240,12 @@ class MeshSession(
     /** Emitted (key-prefix hex) when a contact is imported, so the UI can scroll to it. */
     private val _importedContact = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val importedContact: SharedFlow<String> = _importedContact.asSharedFlow()
+
+    /** Emitted when a private-key export completes (the identity, or Unsupported). */
+    private val _privateKeyExport = MutableSharedFlow<PrivateKeyExport>(extraBufferCapacity = 4)
+    val privateKeyExport: SharedFlow<PrivateKeyExport> = _privateKeyExport.asSharedFlow()
+    /** True while a CMD_EXPORT_PRIVATE_KEY is in flight (its reply/DISABLED carries no tag). */
+    @Volatile private var pendingKeyExport = false
 
     /** Emitted for each freshly-received incoming message — drives background notifications. */
     private val _incomingMessages = MutableSharedFlow<ChatMessage>(extraBufferCapacity = 16)
@@ -493,6 +507,7 @@ class MeshSession(
         _pathDiscovery.value = emptyMap()
         _advertPaths.value = emptyMap()
         pendingAdvertPathKey = null
+        pendingKeyExport = false
         discoverTag = 0L
         _repeaters.value = emptyMap()
         pendingLoginPw.clear()
@@ -834,6 +849,33 @@ class MeshSession(
     }
 
     /**
+     * Export this node's identity key. The 64-byte private+public blob (or [PrivateKeyExport.Unsupported]
+     * if the firmware disables export) arrives on [privateKeyExport].
+     */
+    fun exportPrivateKey() {
+        pendingKeyExport = true
+        scope.launch { runCatching { link.send(Requests.exportPrivateKey()) } }
+    }
+
+    /**
+     * Replace this node's identity with [identity64] (the 64-byte blob from [exportPrivateKey]).
+     * Result (OK/ERR/disabled) surfaces on [settingsResult] as "Private key import". On success the
+     * device reloads its contacts; call [refreshAfterIdentityChange] to re-sync our view.
+     */
+    fun importPrivateKey(identity64: ByteArray) {
+        if (identity64.size != 64) {
+            _settingsResult.tryEmit(SettingsResult("Private key import", false))
+            return
+        }
+        applySetting("Private key import", Requests.importPrivateKey(identity64))
+    }
+
+    /** Re-run the post-connect handshake (self-info → contacts sync) after an identity change. */
+    fun refreshAfterIdentityChange() {
+        scope.launch { runCatching { link.send(Requests.appStart()) } }
+    }
+
+    /**
      * Import a contact from a pasted "card" (hex). The card is a self-advert packet, so we can
      * decode it locally and add the contact optimistically — no full contacts resync needed
      * (that re-downloads every contact and takes seconds). The device still persists it via
@@ -1049,6 +1091,17 @@ class MeshSession(
                 pendingSettings.isNotEmpty() -> resolveSetting(false)
                 enumeratingChannels -> finishChannelEnumeration() // err = no more channel slots
                 else -> onSendFailed()
+            }
+            is Incoming.PrivateKey -> if (pendingKeyExport) {
+                pendingKeyExport = false
+                _privateKeyExport.tryEmit(PrivateKeyExport.Ready(f.identity.toHex()))
+            }
+            // RESP_CODE_DISABLED: a feature the firmware wasn't built with. Correlate to an
+            // in-flight key export/import; otherwise ignore (e.g. companion mode disabled).
+            Incoming.Disabled -> when {
+                pendingKeyExport -> { pendingKeyExport = false; _privateKeyExport.tryEmit(PrivateKeyExport.Unsupported) }
+                pendingSettings.isNotEmpty() -> resolveSetting(false)
+                else -> Unit
             }
             is Incoming.Tuning -> _tuning.value = f.params
             is Incoming.AutoAdd -> _autoAdd.value = f.config

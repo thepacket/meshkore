@@ -58,6 +58,7 @@ import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.NotifyPrefs
 import org.thepacket.meshcore.protocol.AutoAdd
 import org.thepacket.meshcore.protocol.SelfInfo
+import org.thepacket.meshcore.protocol.hexToBytes
 
 private val TELEM = listOf("Deny", "Allow-listed", "Everyone")
 
@@ -100,6 +101,21 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
     LaunchedEffect(Unit) {
         session.settingsResult.collect { r ->
             Toast.makeText(ctx, "${r.label}: ${if (r.ok) "saved ✓" else "failed"}", Toast.LENGTH_SHORT).show()
+            // A new identity invalidates the device's contact secrets — re-sync our view.
+            if (r.label == "Private key import" && r.ok) session.refreshAfterIdentityChange()
+        }
+    }
+
+    var showExportKeyWarn by remember { mutableStateOf(false) }
+    var exportedKeyHex by remember { mutableStateOf<String?>(null) }
+    var showImportKey by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        session.privateKeyExport.collect { res ->
+            when (res) {
+                is org.thepacket.meshcore.app.PrivateKeyExport.Ready -> exportedKeyHex = res.hex
+                org.thepacket.meshcore.app.PrivateKeyExport.Unsupported ->
+                    toast(ctx, "Key export is disabled in this firmware")
+            }
         }
     }
 
@@ -381,6 +397,19 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             ToolButton("Factory reset", danger = true) { showFactory = true }
         }
 
+        // ---- Identity (advanced) ----
+        SectionCard("Identity (advanced)") {
+            Text(
+                "This node's cryptographic identity (private key). Back it up to restore or clone " +
+                    "this node, or import a key to change its identity. ⚠ Anyone who has the exported " +
+                    "key can impersonate this node — keep it secret.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            ToolButton("Export private key") { showExportKeyWarn = true }
+            ToolButton("Import private key") { showImportKey = true }
+        }
+
         // ---- Time ----
         val timeOffset by session.deviceTimeOffsetMs.collectAsStateWithLifecycle()
         SectionCard("Time") {
@@ -429,6 +458,81 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             ctx.startActivity(Intent.createChooser(intent, "Share debug logs"))
         },
         onDismiss = { showLogs = false },
+    )
+
+    ConfirmDialog(showExportKeyWarn, "Export private key",
+        "This reveals this node's secret identity key. Anyone with it can impersonate this node — " +
+            "only export to a trusted, private place. Continue?", "Export", danger = true,
+        onConfirm = { session.exportPrivateKey() }, onDismiss = { showExportKeyWarn = false })
+
+    exportedKeyHex?.let { hex ->
+        PrivateKeyDialog(hex, onDismiss = { exportedKeyHex = null })
+    }
+
+    if (showImportKey) ImportPrivateKeyDialog(
+        onDismiss = { showImportKey = false },
+        onImport = { bytes -> session.importPrivateKey(bytes); showImportKey = false },
+    )
+}
+
+/** Shows an exported identity key (64-byte private+public blob as hex) with a copy action. */
+@Composable
+private fun PrivateKeyDialog(hex: String, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Private key") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Keep this secret. It's the 64-byte identity (private + public key).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+                SelectionContainer {
+                    Text(hex, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("MeshCore private key", hex))
+                toast(ctx, "Copied — keep it safe")
+            }) { Text("Copy") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+/** Paste a 64-byte identity (128 hex chars) to replace this node's identity. */
+@Composable
+private fun ImportPrivateKeyDialog(onDismiss: () -> Unit, onImport: (ByteArray) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val clean = text.trim().replace(" ", "").lowercase()
+    val valid = clean.length == 128 && clean.all { it in "0123456789abcdef" }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Import private key") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("⚠ Replaces this node's identity with the pasted key (128 hex chars = 64 bytes, " +
+                    "as produced by Export). The device re-derives its contact secrets. This changes " +
+                    "the node's public address.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+                OutlinedTextField(
+                    value = text, onValueChange = { text = it },
+                    label = { Text("Identity key (hex)") }, singleLine = false, maxLines = 4,
+                    isError = text.isNotBlank() && !valid,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onImport(clean.hexToBytes()) }, enabled = valid) {
+                Text("Import", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
