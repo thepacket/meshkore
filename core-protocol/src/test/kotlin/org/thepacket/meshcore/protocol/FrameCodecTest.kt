@@ -691,6 +691,16 @@ class FrameCodecTest {
         assertTrue(FrameDecoder.decode(byteArrayOf(Resp.DISABLED.toByte())) is Incoming.Disabled)
     }
 
+    @Test fun setDevicePinShape() {
+        // [cmd, pin(u32 LE)] — a 6-digit PIN.
+        val f = Requests.setDevicePin(123456)
+        val r = FrameReader(f)
+        assertEquals(Cmd.SET_DEVICE_PIN, r.u8())
+        assertEquals(123456L, r.u32())
+        // 0 clears to the device default.
+        assertArrayEquals(byteArrayOf(Cmd.SET_DEVICE_PIN.toByte(), 0, 0, 0, 0), Requests.setDevicePin(0))
+    }
+
     @Test fun setPathHashModeShape() {
         assertArrayEquals(byteArrayOf(Cmd.SET_PATH_HASH_MODE.toByte(), 0, 2), Requests.setPathHashMode(2))
     }

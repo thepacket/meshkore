@@ -41,6 +41,14 @@ object Requests {
 
     fun getBattAndStorage(): ByteArray = FrameWriter().u8(Cmd.GET_BATT_AND_STORAGE).build()
 
+    /**
+     * Set the BLE pairing PIN. [pin] must be 0 (clear → firmware uses its default: a random
+     * per-session or build-time static PIN) or a 6-digit value (100000–999999). Replies OK, or
+     * ERR for an out-of-range value. Frame: [cmd, pin(u32)].
+     */
+    fun setDevicePin(pin: Long): ByteArray =
+        FrameWriter().u8(Cmd.SET_DEVICE_PIN).u32(pin).build()
+
     /** Incremental sync: pass the last `lastMod` seen to fetch only newer contacts (0 = all). */
     fun getContacts(since: Long = 0): ByteArray =
         FrameWriter().u8(Cmd.GET_CONTACTS).u32(since).build()

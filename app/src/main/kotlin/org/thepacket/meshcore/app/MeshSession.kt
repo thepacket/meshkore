@@ -616,6 +616,19 @@ class MeshSession(
 
     fun applyPathHashMode(mode: Int) = applySetting("Path-hash mode", Requests.setPathHashMode(mode))
 
+    /**
+     * Set the BLE pairing PIN (0 = clear to the device default, else a 6-digit value). Result
+     * surfaces on [settingsResult] as "Pairing PIN"; the device is re-queried so [deviceInfo]'s
+     * PIN reflects the change.
+     */
+    fun applyDevicePin(pin: Long) {
+        pendingSettings.addLast("Pairing PIN")
+        scope.launch {
+            link.send(Requests.setDevicePin(pin))
+            link.send(Requests.deviceQuery()) // refresh the stored PIN shown in Device info
+        }
+    }
+
     fun syncTimeFromPhone() {
         applySetting("Time", Requests.setDeviceTime(System.currentTimeMillis() / 1000))
         refreshDeviceTime() // read it back so the displayed clock reflects the write

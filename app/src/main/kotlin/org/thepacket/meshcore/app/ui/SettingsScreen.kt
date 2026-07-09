@@ -410,6 +410,51 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             ToolButton("Import private key") { showImportKey = true }
         }
 
+        // ---- Pairing PIN ----
+        SectionCard("Pairing PIN") {
+            Text(
+                "BLE pairing PIN for MITM-protected pairing. Set a fixed 6-digit PIN, or clear it to " +
+                    "use the device default (a random per-session PIN, or the firmware's static one). " +
+                    "Takes effect on the next pairing — you may need to forget/re-pair the device on this phone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            deviceInfo?.let {
+                KeyVal("Current PIN",
+                    if (it.blePin in 100000..999999) it.blePin.toString() else "none / device default")
+            }
+            var pin by remember(deviceInfo?.blePin) {
+                mutableStateOf(if ((deviceInfo?.blePin ?: 0L) in 100000..999999) deviceInfo!!.blePin.toString() else "")
+            }
+            var confirmPin by remember { mutableStateOf<Long?>(null) }
+            Field("New PIN (6 digits; blank = clear)", pin) { pin = it.filter(Char::isDigit).take(6) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { confirmPin = 0L }) { Text("Clear PIN") }
+                Button(onClick = { confirmPin = pin.toLongOrNull() }, enabled = pin.length == 6) { Text("Save") }
+            }
+            confirmPin?.let { newPin ->
+                AlertDialog(
+                    onDismissRequest = { confirmPin = null },
+                    title = { Text(if (newPin == 0L) "Clear pairing PIN?" else "Set pairing PIN?") },
+                    text = {
+                        Text(
+                            if (newPin == 0L)
+                                "The device reverts to its default PIN (random per session, or a build-time " +
+                                    "static PIN). You may need to forget and re-pair it on this phone."
+                            else "Set the pairing PIN to $newPin. It applies on the next pairing — you may need " +
+                                "to forget and re-pair the device on this phone. Don't lose it."
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { session.applyDevicePin(newPin); confirmPin = null }) {
+                            Text(if (newPin == 0L) "Clear" else "Set")
+                        }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmPin = null }) { Text("Cancel") } },
+                )
+            }
+        }
+
         // ---- Time ----
         val timeOffset by session.deviceTimeOffsetMs.collectAsStateWithLifecycle()
         SectionCard("Time") {
