@@ -402,11 +402,22 @@ private fun DiscoverTool(
     // (re)populated when the user taps Discover — never cleared automatically.
     val discovered by session.discovered.collectAsStateWithLifecycle()
     val contacts by session.contacts.collectAsStateWithLifecycle()
+    val allContacts by session.allContacts.collectAsStateWithLifecycle()
     val heard by session.heard.collectAsStateWithLifecycle()
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<DiscoveredNode?>(null) }
     var autoRefresh by remember { mutableStateOf(false) }
+
+    // Discovery replies carry no name — only the key/type/signal. Resolve a friendly name from
+    // the aggregate address book (contacts seen on any device), then from a heard advert; fall
+    // back to the hex key prefix. Heard entries whose "name" is just the hex prefix don't count.
+    fun displayName(n: DiscoveredNode): String {
+        allContacts.firstOrNull { it.keyPrefixHex == n.keyPrefixHex }?.name?.ifBlank { null }?.let { return it }
+        heard.firstOrNull { it.pubKeyHex.startsWith(n.keyPrefixHex) }
+            ?.takeIf { it.name.isNotBlank() && it.name != it.pubKeyHex.take(12) }?.let { return it.name }
+        return n.keyPrefixHex
+    }
 
     // Periodic discovery runs only while this screen is open (the effect is cancelled on leave).
     // 60s stays within the firmware's responder rate-limit (4 per 2 min) and is airtime-frugal.
@@ -452,7 +463,7 @@ private fun DiscoverTool(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(c?.name?.ifBlank { null } ?: n.keyPrefixHex, fontWeight = FontWeight.SemiBold)
+                            Text(displayName(n), fontWeight = FontWeight.SemiBold)
                             Text(nodeTypeName(n.type), style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary)
                         }
@@ -467,7 +478,7 @@ private fun DiscoverTool(
     selected?.let { n ->
         val c = contacts.firstOrNull { it.keyPrefixHex == n.keyPrefixHex }
         NodeDetailSheet(
-            name = c?.name?.ifBlank { null } ?: n.keyPrefixHex,
+            name = displayName(n),
             type = n.type,
             isSelf = false,
             contact = c,
