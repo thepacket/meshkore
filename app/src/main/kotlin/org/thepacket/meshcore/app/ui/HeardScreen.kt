@@ -50,6 +50,10 @@ fun HeardContent(
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
 ) {
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
+    // Resolve names from the persisted aggregate book too (device contacts are empty until a sync
+    // completes, and many heard stations aren't on the current device at all).
+    val allContacts by session.allContacts.collectAsStateWithLifecycle()
+    val book = remember(contacts, allContacts) { (contacts + allContacts).distinctBy { it.keyPrefixHex } }
     if (heard.isEmpty()) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No stations heard yet…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
@@ -66,14 +70,14 @@ fun HeardContent(
         items(heard, key = { it.pubKeyHex }) { h ->
             val distanceKm = if (selfHasGps && h.hasGps)
                 haversineKm(self!!.advLat / 1e6, self.advLon / 1e6, h.latDeg, h.lonDeg) else null
-            HeardRow(h, resolveHeardName(h, contacts), distanceKm) { selected = h }
+            HeardRow(h, resolveHeardName(h, book), distanceKm) { selected = h }
         }
     }
 
     selected?.let { h ->
-        val contact = contacts.firstOrNull { h.pubKeyHex.startsWith(it.keyPrefixHex) }
+        val contact = book.firstOrNull { h.pubKeyHex.startsWith(it.keyPrefixHex) }
         NodeDetailSheet(
-            name = resolveHeardName(h, contacts),
+            name = resolveHeardName(h, book),
             type = contact?.type ?: h.type,
             isSelf = false,
             contact = contact,
