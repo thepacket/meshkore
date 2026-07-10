@@ -44,7 +44,11 @@ details, show on map, and get path to node.
 airtime estimate, and flood-rebroadcast count.
 
 **Statistics** — rolling noise-floor graph; radio / device / packet counters; a **Contacts & channels**
-card (address-book size, device contacts and channels vs. capacity); and **My Telemetry**.
+card (address-book size, device contacts and channels vs. capacity); **My Telemetry**; and a
+**Traffic** analysis card over a persisted, cross-session packet history (5m / 1h / all windows):
+capture rate, estimated **channel-busy** (airtime ÷ window), flood/direct split, duplicate
+(flood-rebroadcast) share, a **packets-over-time** chart, payload-type mix, and **top talkers**
+(busiest sources by packets + airtime, name-resolved).
 
 **Map** — OpenStreetMap plot of positioned nodes drawn from the full address book: typed markers,
 screen-space clustering, labels, and a tap-for-details sheet. Read-only — never reads the phone's GPS
@@ -56,6 +60,9 @@ on its own.
 - **Discover nodes** — one-hop discovery listing nearby companions/repeaters/rooms/sensors.
 - **Advertise** — zero-hop, flood-routed, or copy this node's advert card to the clipboard.
 - **Raw data** — send a raw custom-payload packet (text/hex) to a contact, and view received raw frames.
+- **Mesh topology** — an interactive routing graph centred on this node, built from learned contact
+  paths + observed packet relays (updates live). Pinch-zoom / pan, tap a node to focus it and its
+  neighbours, and **export the graph as SVG**.
 
 **Settings** — full editable device config: node name, region presets, frequency / bandwidth / SF /
 coding rate, TX power, client-repeat (with allowed-frequency guard), advertised position (typed, picked

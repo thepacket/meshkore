@@ -80,30 +80,36 @@ class Topology(
  * Byte labels resolve from a matching contact (preferring a named repeater) or a name seen in an
  * advert, else "0xNN". Directly-reachable chat/sensor contacts are collapsed into a count.
  */
-fun buildTopology(self: SelfInfo?, contacts: List<Contact>, packets: List<RxLog>): Topology {
+fun buildTopology(
+    self: SelfInfo?,
+    contacts: List<Contact>,
+    nameBook: List<Contact>,
+    packets: List<RxLog>,
+    edgeLimit: Int = 500,
+): Topology {
     val selfId = "self"
     val selfByte = self?.publicKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF }
 
-    // Names seen in adverts, keyed by source byte — the most reliable label for unknown relays.
+    // Harvest advert names from the WHOLE (persisted) history so labels resolve immediately —
+    // including nodes named in past sessions; build edges only from the recent slice.
     val advNames = HashMap<Int, String>()
-    // Ordered relay chains observed in packets (source? + hops), reaching us.
     val chains = ArrayList<List<Int>>()
-    packets.forEach { pkt ->
+    packets.forEachIndexed { idx, pkt ->
         val p = PacketInspector.parse(pkt.raw)
         p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { name ->
             val b = p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF }
             if (b != null) advNames.putIfAbsent(b, name)
         }
-        if (p.pathHashes.isNotEmpty()) {
+        if (idx < edgeLimit && p.pathHashes.isNotEmpty()) {
             val src = p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: p.srcHash
             chains.add(buildList { src?.let { add(it) }; addAll(p.pathHashes) })
         }
     }
 
     fun byteId(b: Int) = "b:%02x".format(b)
-    // Label + kind for a byte, from contacts (name/type) then advert name, else hex.
+    // Label + kind for a byte: the aggregate address book (name/type), then an advert name, else hex.
     fun labelKind(b: Int): Pair<String, TopoKind> {
-        val cs = contacts.filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == b }
+        val cs = nameBook.filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == b }
         val kind = when {
             cs.any { it.type == ContactType.REPEATER } -> TopoKind.Repeater
             cs.any { it.type == ContactType.ROOM } -> TopoKind.Room
@@ -169,6 +175,7 @@ fun buildTopology(self: SelfInfo?, contacts: List<Contact>, packets: List<RxLog>
 @Composable
 fun MeshTopologyScreen(session: MeshSession, onBack: () -> Unit) {
     val contacts by session.contacts.collectAsStateWithLifecycle()
+    val allContacts by session.allContacts.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
     val packets by session.packetHistory.collectAsStateWithLifecycle()
 
@@ -177,10 +184,10 @@ fun MeshTopologyScreen(session: MeshSession, onBack: () -> Unit) {
     val sig = run {
         var h = self?.publicKey?.firstOrNull()?.toInt() ?: 0
         for (c in contacts) { h = h * 31 + c.keyPrefixHex.hashCode(); h = h * 31 + c.outPathLen }
-        h * 31 + packets.size / 15
+        (h * 31 + allContacts.size) * 31 + packets.size / 15
     }
-    val recent = remember(packets.size / 15) { packets.take(500) }
-    val topo = remember(sig) { buildTopology(self, contacts, recent) }
+    // Names resolve from the aggregate book + the whole persisted history; edges from the recent slice.
+    val topo = remember(sig) { buildTopology(self, contacts, allContacts, packets) }
 
     val cs = MaterialTheme.colorScheme
     fun colorFor(kind: TopoKind): Color = when (kind) {
