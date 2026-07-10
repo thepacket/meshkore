@@ -37,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -341,15 +340,12 @@ fun MeshTopologyScreen(
                     )
                 }
         ) {
-            Canvas(
-                Modifier.fillMaxSize().graphicsLayer(
-                    scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y,
-                )
-            ) {
+            Canvas(Modifier.fillMaxSize()) {
                 val cx = size.width / 2f
                 val cy = size.height / 2f
                 val margin = 44f
                 val ringGap = (min(cx, cy) - margin) / topo.maxDepth.coerceAtLeast(1)
+                // Base ("world") layout positions — independent of zoom.
                 topo.nodes.groupBy { it.depth }.forEach { (depth, group) ->
                     if (depth == 0) group.forEach { it.x = cx; it.y = cy }
                     else {
@@ -360,7 +356,11 @@ fun MeshTopologyScreen(
                         }
                     }
                 }
-                val pos = topo.nodes.associate { it.id to Offset(it.x, it.y) }
+                // Zoom scales the layout (spreads nodes apart, like a map); dots/labels/lines keep a
+                // constant pixel size. screen = centre + (world - centre)*scale + pan.
+                fun screen(wx: Float, wy: Float) =
+                    Offset(cx + (wx - cx) * scale + offset.x, cy + (wy - cy) * scale + offset.y)
+                val pos = topo.nodes.associate { it.id to screen(it.x, it.y) }
                 topo.edges.forEach { e ->
                     // When a node is focused, only draw edges touching it.
                     if (focusSet != null && e.a != selected && e.b != selected) return@forEach
@@ -373,11 +373,12 @@ fun MeshTopologyScreen(
                 }
                 topo.nodes.forEach { n ->
                     if (focusSet != null && n.id !in focusSet) return@forEach // hide non-neighbours
+                    val p = pos[n.id] ?: return@forEach
                     val focused = n.id == selected
                     val baseR = if (n.kind == TopoKind.Self) 12f else 7f
-                    drawCircle(colorFor(n.kind), radius = if (focused) baseR + 4f else baseR, center = Offset(n.x, n.y))
-                    // Full label — pinch/zoom to separate overlapping names rather than truncating.
-                    drawContext.canvas.nativeCanvas.drawText(n.label, n.x, n.y - 12f, paint)
+                    drawCircle(colorFor(n.kind), radius = if (focused) baseR + 4f else baseR, center = p)
+                    // Full label at constant size — zoom spreads names apart rather than magnifying them.
+                    drawContext.canvas.nativeCanvas.drawText(n.label, p.x, p.y - 12f, paint)
                 }
             }
         }
