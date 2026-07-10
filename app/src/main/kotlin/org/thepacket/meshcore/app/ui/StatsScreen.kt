@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +47,7 @@ import org.thepacket.meshcore.protocol.ParsedPacket
 import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.RadioStats
 import org.thepacket.meshcore.protocol.RouteType
+import org.thepacket.meshcore.protocol.RxLog
 
 @Composable
 fun StatsContent(
@@ -160,6 +162,10 @@ private fun TrafficCard(session: MeshSession) {
             val dups = count - pkts.distinctBy { it.hex }.size
             StatRow("Duplicate copies", "$dups (${dups * 100 / count}%)")
 
+            Text("Over time", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
+            TrafficSparkline(pkts, now, spanMs)
+
             Text("By type", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
             pkts.groupingBy { it.payloadType }.eachCount().entries
@@ -191,6 +197,39 @@ private fun TrafficCard(session: MeshSession) {
                 talkers.forEach { t -> TalkerRow(t.label, t.count, maxCount, t.airtimeMs) }
             }
         }
+    }
+}
+
+/**
+ * Packets-over-time bar chart: bins the window into fixed slots and draws per-slot packet counts,
+ * so bursts and quiet periods are visible. [spanMs] is the time from the oldest packet to [nowMs].
+ */
+@Composable
+private fun TrafficSparkline(pkts: List<RxLog>, nowMs: Long, spanMs: Long) {
+    val bars = 40
+    val counts = remember(pkts, nowMs) {
+        val c = IntArray(bars)
+        val oldest = nowMs - spanMs
+        pkts.forEach {
+            val f = ((it.receivedAtMs - oldest).toDouble() / spanMs).coerceIn(0.0, 1.0)
+            c[(f * (bars - 1)).toInt()]++
+        }
+        c
+    }
+    val maxC = (counts.maxOrNull() ?: 0).coerceAtLeast(1)
+    val barColor = MaterialTheme.colorScheme.primary
+    Canvas(Modifier.fillMaxWidth().height(72.dp)) {
+        val slot = size.width / bars
+        counts.forEachIndexed { i, c ->
+            val bh = size.height * (c.toFloat() / maxC)
+            drawRect(barColor, topLeft = Offset(i * slot, size.height - bh), size = Size(slot * 0.75f, bh))
+        }
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("${fmtDuration(spanMs / 1000)} ago", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        Text("peak $maxC/slot · now", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
     }
 }
 
