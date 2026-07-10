@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataObject
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Route
@@ -94,6 +95,7 @@ fun ToolsContent(
             "trace" -> TraceTool(session, contacts, self) { open = null }
             "discover" -> DiscoverTool(session, self, onShowOnMap) { open = null }
             "rawdata" -> RawDataTool(session, contacts, ::notify) { open = null }
+            "topology" -> MeshTopologyScreen(session) { open = null }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -117,6 +119,10 @@ fun ToolsContent(
                 ToolRow(Icons.Default.DataObject, "Raw data",
                     "Send a raw custom-payload packet to a contact, and view received raw data.") {
                     open = "rawdata"
+                }
+                ToolRow(Icons.Default.Hub, "Mesh topology",
+                    "Visualise the routing graph — how this node reaches others through relays.") {
+                    open = "topology"
                 }
             }
         }
