@@ -1,14 +1,18 @@
 package org.thepacket.meshcore.app.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
@@ -21,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontFamily
@@ -29,9 +34,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.protocol.CoreStats
+import org.thepacket.meshcore.protocol.LoRaAirtime
 import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PacketStats
+import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.RadioStats
+import org.thepacket.meshcore.protocol.RouteType
 
 @Composable
 fun StatsContent(
@@ -52,6 +60,7 @@ fun StatsContent(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         AddressBookCard(session)
+        TrafficCard(session)
         TelemetryCard(telemetry, onRefreshTelemetry)
         NoiseCard(noiseHistory, radio?.noiseFloor)
         radio?.let { RadioCard(it) }
@@ -83,6 +92,72 @@ private fun AddressBookCard(session: MeshSession) {
                 "Device channels",
                 if (maxChannels != null) "${channels.size} / $maxChannels" else "${channels.size}",
             )
+        }
+    }
+}
+
+/**
+ * Live traffic analysis over the packet-monitor window: capture rate, estimated channel-busy
+ * (airtime ÷ window), payload-type mix, flood/direct split, and duplicate (flood-rebroadcast) share.
+ * Computed from the in-memory RX feed, so it reflects the last N packets, not full history.
+ */
+@Composable
+private fun TrafficCard(session: MeshSession) {
+    val packets by session.packets.collectAsStateWithLifecycle()
+    val self by session.self.collectAsStateWithLifecycle()
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Traffic (live window)", style = MaterialTheme.typography.titleMedium)
+            if (packets.isEmpty()) {
+                Text("No packets captured yet — open the Packets tab or wait for RX.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            // The feed is newest-first; the window spans oldest→newest receive time.
+            val newest = packets.first().receivedAtMs
+            val oldest = packets.last().receivedAtMs
+            val windowMs = (newest - oldest).coerceAtLeast(1L)
+            val count = packets.size
+            val perMin = count / (windowMs / 60_000.0)
+            StatRow("Captured", "$count pkts · ${fmtDuration(windowMs / 1000)}")
+            StatRow("Rate", "%.1f pkts/min".format(perMin))
+            self?.let { s ->
+                val airtimeMs = packets.sumOf { LoRaAirtime.airtimeMs(it.length, s.bwKhz, s.radioSf, s.radioCr) ?: 0.0 }
+                val busy = (airtimeMs / windowMs * 100).coerceIn(0.0, 100.0)
+                StatRow("Channel busy", "%.1f%% · %.1fs airtime".format(busy, airtimeMs / 1000))
+            }
+
+            val flood = packets.count { it.routeType == RouteType.FLOOD || it.routeType == RouteType.TRANSPORT_FLOOD }
+            val direct = packets.count { it.routeType == RouteType.DIRECT || it.routeType == RouteType.TRANSPORT_DIRECT }
+            StatRow("Flood / direct", "$flood / $direct")
+            val dups = count - packets.distinctBy { it.hex }.size
+            StatRow("Duplicate copies", "$dups (${dups * 100 / count}%)")
+
+            Text("By type", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
+            packets.groupingBy { it.payloadType }.eachCount().entries
+                .sortedByDescending { it.value }
+                .forEach { (type, c) -> BarRow(PayloadType.name(type), c, count) }
+        }
+    }
+}
+
+/** A labelled proportional bar (value / total) for the traffic breakdown. */
+@Composable
+private fun BarRow(label: String, value: Int, total: Int) {
+    val frac = if (total > 0) value.toFloat() / total else 0f
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.labelSmall)
+            Text("$value (${(frac * 100).toInt()}%)", style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace)
+        }
+        Box(
+            Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+        ) {
+            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
         }
     }
 }
