@@ -95,7 +95,7 @@ fun ToolsContent(
             "trace" -> TraceTool(session, contacts, self) { open = null }
             "discover" -> DiscoverTool(session, self, onShowOnMap) { open = null }
             "rawdata" -> RawDataTool(session, contacts, ::notify) { open = null }
-            "topology" -> MeshTopologyScreen(session) { open = null }
+            "topology" -> MeshTopologyScreen(session, onShowOnMap) { open = null }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

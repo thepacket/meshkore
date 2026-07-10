@@ -638,7 +638,7 @@ private fun ImportContactDialog(onDismiss: () -> Unit, onImport: (String) -> Uni
 }
 
 @Composable
-private fun ExportCardDialog(card: String, onDismiss: () -> Unit) {
+internal fun ExportCardDialog(card: String, onDismiss: () -> Unit) {
     // Encode the official MeshCore contact URL so other clients (incl. the official app) can scan it.
     val qr = rememberQrBitmap("meshcore://$card")
     AlertDialog(

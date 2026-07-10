@@ -19,12 +19,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -173,7 +175,11 @@ fun buildTopology(
 }
 
 @Composable
-fun MeshTopologyScreen(session: MeshSession, onBack: () -> Unit) {
+fun MeshTopologyScreen(
+    session: MeshSession,
+    onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+    onBack: () -> Unit,
+) {
     val contacts by session.contacts.collectAsStateWithLifecycle()
     val allContacts by session.allContacts.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
@@ -207,6 +213,27 @@ fun MeshTopologyScreen(session: MeshSession, onBack: () -> Unit) {
     var selected by remember { mutableStateOf<String?>(null) }
     val selNode = topo.nodes.firstOrNull { it.id == selected }
     val ctx = LocalContext.current
+
+    // Long-press opens the contact card (detail sheet) — needs the node's underlying contact.
+    val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
+    val contactMma by session.contactMma.collectAsStateWithLifecycle()
+    val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
+    val advertPaths by session.advertPaths.collectAsStateWithLifecycle()
+    var detail by remember { mutableStateOf<Contact?>(null) }
+    var exportedCard by remember { mutableStateOf<String?>(null) }
+    var showMap by remember { mutableStateOf(false) }
+    LaunchedEffect(session) { session.exportedContact.collect { exportedCard = it } }
+
+    // Resolve a graph node (1-byte identity) to the best matching contact (named repeater first).
+    fun contactForNode(node: TopoNode): Contact? {
+        if (!node.id.startsWith("b:")) return null
+        val byte = node.id.substring(2).toIntOrNull(16) ?: return null
+        val pool = contacts + allContacts.filterNot { a -> contacts.any { it.publicKey.contentEquals(a.publicKey) } }
+        return pool.filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == byte }
+            .sortedWith(compareByDescending<Contact> { it.name.isNotBlank() }
+                .thenByDescending { it.type == ContactType.REPEATER })
+            .firstOrNull()
+    }
     val exportSvg = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/svg+xml")) { uri ->
         uri?.let {
             val ok = runCatching {
@@ -216,12 +243,42 @@ fun MeshTopologyScreen(session: MeshSession, onBack: () -> Unit) {
         }
     }
 
+    if (showMap) {
+        // Map the currently-displayed subset: the whole graph, or — when a node is focused — just
+        // that node and its neighbours (those with a known position).
+        val focusSet = selected?.let { s ->
+            buildSet { add(s); topo.edges.forEach { if (it.a == s) add(it.b); if (it.b == s) add(it.a) } }
+        }
+        val visible = if (focusSet != null) topo.nodes.filter { it.id in focusSet } else topo.nodes
+        val topoContacts = visible.mapNotNull { contactForNode(it) }.distinctBy { it.keyPrefixHex }
+        val placed = topoContacts.count { it.gpsLat != 0 || it.gpsLon != 0 }
+        Box(Modifier.fillMaxSize()) {
+            MapContent(self = self, contacts = topoContacts, heard = emptyList(), modifier = Modifier.fillMaxSize())
+            Surface(
+                color = cs.surface.copy(alpha = 0.92f),
+                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(),
+            ) {
+                Row(Modifier.fillMaxWidth().padding(end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { showMap = false }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to graph")
+                    }
+                    Text("Topology map · $placed of ${topoContacts.size} placed",
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        return
+    }
+
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
             Text("Mesh topology", style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             if (topo.edges.isNotEmpty()) {
+                IconButton(onClick = { showMap = true }) {
+                    Icon(Icons.Default.Map, contentDescription = "Show on map")
+                }
                 IconButton(onClick = { exportSvg.launch("mesh-topology.svg") }) {
                     Icon(Icons.Default.Download, contentDescription = "Export SVG")
                 }
@@ -269,16 +326,19 @@ fun MeshTopologyScreen(session: MeshSession, onBack: () -> Unit) {
                     }
                 }
                 .pointerInput(topo) {
-                    detectTapGestures { tap ->
-                        // Undo the graphics-layer transform (scale around centre, then translate)
-                        // to hit-test in the graph's own coordinate space.
+                    // Undo the graphics-layer transform (scale around centre, then translate) to
+                    // hit-test a tap in the graph's own coordinate space.
+                    fun nodeAt(tap: Offset): TopoNode? {
                         val pivotX = size.width / 2f; val pivotY = size.height / 2f
                         val gx = pivotX + (tap.x - offset.x - pivotX) / scale
                         val gy = pivotY + (tap.y - offset.y - pivotY) / scale
-                        val hit = topo.nodes.minByOrNull { hypot(it.x - gx, it.y - gy) }
-                        val d = hit?.let { hypot(it.x - gx, it.y - gy) } ?: Float.MAX_VALUE
-                        selected = if (hit != null && d < 44f && hit.id != selected) hit.id else null
+                        val hit = topo.nodes.minByOrNull { hypot(it.x - gx, it.y - gy) } ?: return null
+                        return hit.takeIf { hypot(it.x - gx, it.y - gy) < 44f }
                     }
+                    detectTapGestures(
+                        onTap = { tap -> val n = nodeAt(tap); selected = if (n != null && n.id != selected) n.id else null },
+                        onLongPress = { tap -> nodeAt(tap)?.let { contactForNode(it)?.let { c -> detail = c } } },
+                    )
                 }
         ) {
             Canvas(
@@ -330,6 +390,33 @@ fun MeshTopologyScreen(session: MeshSession, onBack: () -> Unit) {
             LegendDot("Relay?", colorFor(TopoKind.Unknown))
         }
     }
+
+    detail?.let { c ->
+        NodeDetailSheet(
+            name = c.name.ifBlank { c.keyPrefixHex },
+            type = c.type,
+            isSelf = false,
+            contact = c,
+            heard = null,
+            self = self,
+            onDismiss = { detail = null },
+            onShare = { session.shareContact(c); detail = null },
+            onResetPath = { session.resetPath(c) },
+            onExport = { session.exportContact(c); detail = null },
+            onRemove = { session.removeContact(c); detail = null },
+            onRequestTelemetry = { session.requestTelemetry(c) },
+            telemetry = contactTelemetry[c.keyPrefixHex],
+            onRequestMma = { session.requestContactMma(c) },
+            mma = contactMma[c.keyPrefixHex],
+            onDiscoverPath = { session.discoverPath(c.publicKey) },
+            pathResult = pathDiscovery[c.keyPrefixHex],
+            onRequestAdvertPath = { session.requestAdvertPath(c) },
+            advertPath = advertPaths[c.keyPrefixHex],
+            advertPathLoaded = advertPaths.containsKey(c.keyPrefixHex),
+            onShowOnMap = { lat, lon -> detail = null; onShowOnMap(lat, lon) },
+        )
+    }
+    exportedCard?.let { card -> ExportCardDialog(card) { exportedCard = null } }
 }
 
 /** Theme-independent colours for the exported SVG (reads on a white background anywhere). */
