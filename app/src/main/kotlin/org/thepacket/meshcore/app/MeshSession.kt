@@ -275,8 +275,10 @@ class MeshSession(
     // --- internal sync/send bookkeeping ---
     private val contactAccumulator = mutableListOf<Contact>()
     private val channelAccumulator = mutableListOf<ChannelEntry>()
-    /** True between CONTACTS_START and END_OF_CONTACTS, to tell a full sync from a lone by-key reply. */
-    private var syncingContacts = false
+    /** True once CONTACTS_START was seen for the current sync (so END can update even when empty). */
+    private var sawContactsStart = false
+    /** Public key of an in-flight GET_CONTACT_BY_KEY, so its lone reply is matched precisely. */
+    @Volatile private var pendingByKeyContact: ByteArray? = null
     private var enumeratingChannels = false
     private var draining = false
     private var localIdSeq = 0L
@@ -581,7 +583,8 @@ class MeshSession(
         contactAccumulator.clear()
         channelAccumulator.clear()
         pendingSends.clear()
-        syncingContacts = false
+        sawContactsStart = false
+        pendingByKeyContact = null
         enumeratingChannels = false
         draining = false
     }
@@ -912,7 +915,12 @@ class MeshSession(
      * longer has it) updates [contacts] in place via [upsertSingleContact].
      */
     fun refreshContact(c: Contact) {
-        scope.launch { runCatching { link.send(Requests.getContactByKey(c.publicKey)) } }
+        pendingByKeyContact = c.publicKey.copyOf()
+        val key = pendingByKeyContact
+        scope.launch {
+            runCatching { link.send(Requests.getContactByKey(c.publicKey)) }
+            delay(5_000); if (pendingByKeyContact === key) pendingByKeyContact = null
+        }
     }
 
     /** Replace (or add) one contact in the live list + aggregate from a by-key fetch reply. */
@@ -1120,18 +1128,33 @@ class MeshSession(
                 _self.value = f.info
                 scope.launch { link.send(Requests.getContacts()) }
             }
-            is Incoming.ContactsStart -> { syncingContacts = true; contactAccumulator.clear() }
-            is Incoming.ContactEntry ->
-                // During a full GET_CONTACTS sync, accumulate; a lone RESP_CODE_CONTACT outside a
-                // sync is the reply to GET_CONTACT_BY_KEY — upsert that one contact in place.
-                if (syncingContacts) contactAccumulator.add(f.contact) else upsertSingleContact(f.contact)
+            is Incoming.ContactsStart -> {
+                sawContactsStart = true
+                pendingByKeyContact = null // a full sync supersedes any pending by-key refresh
+                contactAccumulator.clear()
+            }
+            is Incoming.ContactEntry -> {
+                // A lone reply to GET_CONTACT_BY_KEY matches the exact key we asked for → upsert it
+                // live. Everything else is a full-sync entry and is always accumulated (the firmware
+                // can stream a sync without a CONTACTS_START, so we must not gate accumulation).
+                val byKey = pendingByKeyContact
+                if (byKey != null && f.contact.publicKey.contentEquals(byKey)) {
+                    pendingByKeyContact = null
+                    upsertSingleContact(f.contact)
+                } else {
+                    contactAccumulator.add(f.contact)
+                }
+            }
             is Incoming.ContactsEnd -> {
-                syncingContacts = false
-                // distinctBy guards against a by-key reply that raced into the sync window.
-                val synced = contactAccumulator.distinctBy { it.publicKey.toHex() }
-                _contacts.value = synced.sortedByDescending { it.lastAdvert }
-                // Fold this device's contacts into the persistent cross-device address book.
-                mergeIntoAggregate(synced)
+                // Only publish if this looked like a real sync: a START was seen, or entries arrived.
+                // A START-less, entry-less END must NOT clobber the existing list with an empty one.
+                if (sawContactsStart || contactAccumulator.isNotEmpty()) {
+                    val synced = contactAccumulator.distinctBy { it.publicKey.toHex() }
+                    _contacts.value = synced.sortedByDescending { it.lastAdvert }
+                    // Fold this device's contacts into the persistent cross-device address book.
+                    mergeIntoAggregate(synced)
+                }
+                sawContactsStart = false
                 contactAccumulator.clear()
                 // Drop any locally-stored room history: rooms are server-owned, so we show only
                 // what the room delivers this session. (Room posts arrive later, after login.)
