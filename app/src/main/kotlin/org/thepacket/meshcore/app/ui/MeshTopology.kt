@@ -320,7 +320,7 @@ fun MeshTopologyScreen(
             Modifier.fillMaxWidth().weight(1f).clipToBounds()
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
-                        scale = (scale * zoom).coerceIn(0.4f, 6f)
+                        scale = (scale * zoom).coerceIn(0.15f, 40f)
                         offset += pan
                     }
                 }
