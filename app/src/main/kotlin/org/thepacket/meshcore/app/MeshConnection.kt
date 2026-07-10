@@ -33,7 +33,7 @@ object MeshConnection {
         val app = context.applicationContext
         scanner = CompanionScanner(app)
         link = NordicMeshCoreLink(app)
-        session = MeshSession(link, scope, ChatStore(app), AdminPrefs(app), ContactStore(app))
+        session = MeshSession(link, scope, ChatStore(app), AdminPrefs(app), ContactStore(app), PacketStore(app))
         initialized = true
     }
 }

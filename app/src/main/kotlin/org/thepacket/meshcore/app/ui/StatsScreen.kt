@@ -23,6 +23,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -97,46 +100,63 @@ private fun AddressBookCard(session: MeshSession) {
 }
 
 /**
- * Live traffic analysis over the packet-monitor window: capture rate, estimated channel-busy
- * (airtime ÷ window), payload-type mix, flood/direct split, and duplicate (flood-rebroadcast) share.
- * Computed from the in-memory RX feed, so it reflects the last N packets, not full history.
+ * Traffic analysis over the persisted RX history (spans sessions): capture rate, estimated
+ * channel-busy (airtime ÷ window), payload-type mix, flood/direct split, and duplicate
+ * (flood-rebroadcast) share, for a selectable recent window (5m / 1h / all retained).
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun TrafficCard(session: MeshSession) {
-    val packets by session.packets.collectAsStateWithLifecycle()
+    val history by session.packetHistory.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
+    val windows = remember { listOf("5m" to 5 * 60_000L, "1h" to 60 * 60_000L, "All" to Long.MAX_VALUE) }
+    var wIdx by remember { mutableStateOf(0) }
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Traffic (live window)", style = MaterialTheme.typography.titleMedium)
-            if (packets.isEmpty()) {
-                Text("No packets captured yet — open the Packets tab or wait for RX.",
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("Traffic", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    windows.forEachIndexed { i, (label, _) ->
+                        androidx.compose.material3.FilterChip(
+                            selected = wIdx == i, onClick = { wIdx = i }, label = { Text(label) })
+                    }
+                }
+            }
+
+            val now = System.currentTimeMillis()
+            val windowMs = windows[wIdx].second
+            val pkts = remember(history, wIdx, now) {
+                if (windowMs == Long.MAX_VALUE) history else history.filter { it.receivedAtMs >= now - windowMs }
+            }
+            if (pkts.isEmpty()) {
+                Text("No packets in this window yet.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 return@Column
             }
-            // The feed is newest-first; the window spans oldest→newest receive time.
-            val newest = packets.first().receivedAtMs
-            val oldest = packets.last().receivedAtMs
-            val windowMs = (newest - oldest).coerceAtLeast(1L)
-            val count = packets.size
-            val perMin = count / (windowMs / 60_000.0)
-            StatRow("Captured", "$count pkts · ${fmtDuration(windowMs / 1000)}")
+            // History is newest-first; span covers now back to the oldest packet in the window.
+            val spanMs = (now - pkts.last().receivedAtMs).coerceAtLeast(1L)
+            val count = pkts.size
+            val perMin = count / (spanMs / 60_000.0)
+            StatRow("Captured", "$count pkts · ${fmtDuration(spanMs / 1000)}")
             StatRow("Rate", "%.1f pkts/min".format(perMin))
             self?.let { s ->
-                val airtimeMs = packets.sumOf { LoRaAirtime.airtimeMs(it.length, s.bwKhz, s.radioSf, s.radioCr) ?: 0.0 }
-                val busy = (airtimeMs / windowMs * 100).coerceIn(0.0, 100.0)
+                val airtimeMs = pkts.sumOf { LoRaAirtime.airtimeMs(it.length, s.bwKhz, s.radioSf, s.radioCr) ?: 0.0 }
+                val busy = (airtimeMs / spanMs * 100).coerceIn(0.0, 100.0)
                 StatRow("Channel busy", "%.1f%% · %.1fs airtime".format(busy, airtimeMs / 1000))
             }
 
-            val flood = packets.count { it.routeType == RouteType.FLOOD || it.routeType == RouteType.TRANSPORT_FLOOD }
-            val direct = packets.count { it.routeType == RouteType.DIRECT || it.routeType == RouteType.TRANSPORT_DIRECT }
+            val flood = pkts.count { it.routeType == RouteType.FLOOD || it.routeType == RouteType.TRANSPORT_FLOOD }
+            val direct = pkts.count { it.routeType == RouteType.DIRECT || it.routeType == RouteType.TRANSPORT_DIRECT }
             StatRow("Flood / direct", "$flood / $direct")
-            val dups = count - packets.distinctBy { it.hex }.size
+            val dups = count - pkts.distinctBy { it.hex }.size
             StatRow("Duplicate copies", "$dups (${dups * 100 / count}%)")
 
             Text("By type", style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
-            packets.groupingBy { it.payloadType }.eachCount().entries
+            pkts.groupingBy { it.payloadType }.eachCount().entries
                 .sortedByDescending { it.value }
                 .forEach { (type, c) -> BarRow(PayloadType.name(type), c, count) }
         }

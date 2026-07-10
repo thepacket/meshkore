@@ -96,10 +96,12 @@ class MeshSession(
     private val chatStore: ChatStore? = null,
     private val adminPrefs: AdminPrefs? = null,
     private val contactStore: ContactStore? = null,
+    private val packetStore: PacketStore? = null,
 ) {
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
         const val MAX_PACKETS = 200 // cap the live packet feed
+        const val MAX_PACKET_HISTORY = 2000 // cap the persisted analytics history
         const val NOISE_HISTORY = 120 // noise-floor samples retained for the graph
         const val TAG = "MeshSession"
     }
@@ -149,6 +151,13 @@ class MeshSession(
     /** Live raw-packet feed (newest first, capped). */
     private val _packets = MutableStateFlow<List<RxLog>>(emptyList())
     val packets: StateFlow<List<RxLog>> = _packets.asStateFlow()
+
+    /**
+     * Persisted RX packet history for analytics (newest first, capped), spanning sessions —
+     * unlike [packets] it is NOT cleared on disconnect and is restored on app start.
+     */
+    private val _packetHistory = MutableStateFlow<List<RxLog>>(emptyList())
+    val packetHistory: StateFlow<List<RxLog>> = _packetHistory.asStateFlow()
 
     private val _radioStats = MutableStateFlow<RadioStats?>(null)
     val radioStats: StateFlow<RadioStats?> = _radioStats.asStateFlow()
@@ -283,6 +292,7 @@ class MeshSession(
     private var draining = false
     private var localIdSeq = 0L
     private var saveJob: Job? = null
+    private var packetSaveJob: Job? = null
     /** Outgoing messages awaiting their immediate SENT/OK reply, FIFO (link is sequential). */
     private val pendingSends = ArrayDeque<Long>()
 
@@ -296,6 +306,7 @@ class MeshSession(
         }
         chatStore?.loadUnread()?.let { if (it.isNotEmpty()) _unread.value = it }
         contactStore?.load()?.let { if (it.isNotEmpty()) _allContacts.value = it }
+        packetStore?.load()?.let { if (it.isNotEmpty()) _packetHistory.value = it.take(MAX_PACKET_HISTORY) }
         scope.launch { link.incoming.collect(::onFrame) }
     }
 
@@ -551,6 +562,9 @@ class MeshSession(
         _channels.value = emptyList()
         // NB: _messages is intentionally NOT cleared — chat history persists across disconnects.
         _packets.value = emptyList()
+        // _packetHistory persists across disconnects — flush it now so the latest survives.
+        packetSaveJob?.cancel(); packetSaveJob = null
+        packetStore?.save(_packetHistory.value)
         _radioStats.value = null
         _coreStats.value = null
         _packetStats.value = null
@@ -716,7 +730,7 @@ class MeshSession(
 
     fun factoryReset() = scope.launch { runCatching { link.send(Requests.factoryReset()) } }.let {}
 
-    /** Clear local app data (chat history, heard list, packet feed). Contacts re-sync on connect. */
+    /** Clear local app data (chat history, heard list, packet feed + history). Contacts re-sync on connect. */
     fun purgeLocalData() {
         _messages.value = emptyMap()
         _unread.value = emptyMap()
@@ -724,6 +738,9 @@ class MeshSession(
         chatStore?.saveUnread(emptyMap())
         _heard.value = emptyList()
         _packets.value = emptyList()
+        _packetHistory.value = emptyList()
+        packetSaveJob?.cancel(); packetSaveJob = null
+        packetStore?.save(emptyList())
     }
 
     /** Export the device settings we can read, as pretty JSON (for the Export Config tool). */
@@ -1284,6 +1301,8 @@ class MeshSession(
 
             is Incoming.RxPacket -> {
                 _packets.update { (listOf(f.log) + it).take(MAX_PACKETS) }
+                _packetHistory.update { (listOf(f.log) + it).take(MAX_PACKET_HISTORY) }
+                schedulePacketSave()
                 // Remember the signal of the latest advert packet to attach to the advert push.
                 if (f.log.payloadType == PayloadType.ADVERT) {
                     lastAdvertSnrQ = f.log.snrQ; lastAdvertRssi = f.log.rssi
@@ -1454,6 +1473,20 @@ class MeshSession(
             delay(400)
             val rooms = roomConvIds()
             store.save(_messages.value.filterKeys { it !in rooms })
+        }
+    }
+
+    /**
+     * Persist the packet history at most ~once per 20s while packets keep arriving (a leading
+     * throttle: the first packet in a burst schedules the save; later packets don't reschedule),
+     * so a fast RX stream doesn't rewrite the file constantly.
+     */
+    private fun schedulePacketSave() {
+        val store = packetStore ?: return
+        if (packetSaveJob?.isActive == true) return
+        packetSaveJob = scope.launch {
+            delay(20_000)
+            store.save(_packetHistory.value)
         }
     }
 }
