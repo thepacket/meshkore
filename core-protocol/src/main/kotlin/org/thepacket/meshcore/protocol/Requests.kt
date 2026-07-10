@@ -92,6 +92,29 @@ object Requests {
     fun removeContact(pubKey: ByteArray): ByteArray =
         FrameWriter().u8(Cmd.REMOVE_CONTACT).bytes(pubKey.copyOf(32)).build()
 
+    /**
+     * Ask whether the device currently has an active login session with the repeater/room at
+     * [pubKey]. Replies OK (session active) or ERR (none). Frame: [cmd, pubKey(32)].
+     */
+    fun hasConnection(pubKey: ByteArray): ByteArray =
+        FrameWriter().u8(Cmd.HAS_CONNECTION).bytes(pubKey.copyOf(32)).build()
+
+    /**
+     * Send an anonymous (pre-login) request to a repeater at [pubKey]. [reqType] is an
+     * [AnonReqType]; [replyPath] is the route the server should use to reply (empty = zero-hop,
+     * for a direct neighbour). The device replies RESP_CODE_SENT, then the answer arrives later
+     * as a PUSH_CODE_BINARY_RESPONSE. Frame: [cmd, pubKey(32), reqType(1), replyPathLen(1), replyPath].
+     * NB: the typed queries are direct-route only, so this needs a direct path to the repeater.
+     */
+    fun sendAnonReq(pubKey: ByteArray, reqType: Int, replyPath: ByteArray = ByteArray(0)): ByteArray =
+        FrameWriter()
+            .u8(Cmd.SEND_ANON_REQ)
+            .bytes(pubKey.copyOf(32))
+            .u8(reqType)
+            .u8(replyPath.size)
+            .bytes(replyPath)
+            .build()
+
     /** Re-advertise a contact zero-hop so direct neighbours can discover it. Frame: [cmd, pubKey(32)]. */
     fun shareContact(pubKey: ByteArray): ByteArray =
         FrameWriter().u8(Cmd.SHARE_CONTACT).bytes(pubKey.copyOf(32)).build()

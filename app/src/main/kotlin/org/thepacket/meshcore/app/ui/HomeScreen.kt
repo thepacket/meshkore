@@ -132,6 +132,7 @@ private fun AllContactsList(
     val allContacts by session.allContacts.collectAsStateWithLifecycle()
     val deviceContacts by session.contacts.collectAsStateWithLifecycle()
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
+    val contactMma by session.contactMma.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val advertPaths by session.advertPaths.collectAsStateWithLifecycle()
     var detail by remember { mutableStateOf<Contact?>(null) }
@@ -252,6 +253,8 @@ private fun AllContactsList(
             onRemove = { session.removeContact(c); session.forgetAggregateContact(c); detail = null },
             onRequestTelemetry = { session.requestTelemetry(c) },
             telemetry = contactTelemetry[c.keyPrefixHex],
+            onRequestMma = { session.requestContactMma(c) },
+            mma = contactMma[c.keyPrefixHex],
             onManage = null,
             onShowOnMap = onShowOnMap,
             onDiscoverPath = { session.discoverPath(c.publicKey) },
@@ -323,6 +326,7 @@ private fun ContactsList(
     // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
     var typeFilter by remember { mutableStateOf(0) }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
+    val contactMma by session.contactMma.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val advertPaths by session.advertPaths.collectAsStateWithLifecycle()
     val unread by session.unread.collectAsStateWithLifecycle()
@@ -447,7 +451,11 @@ private fun ContactsList(
         }
     }
 
-    detail?.let { c ->
+    detail?.let { sel ->
+        // Re-read this contact's current device record on open (learned path, position, last
+        // advert), and reflect the live version so those fields update in place.
+        LaunchedEffect(sel.keyPrefixHex) { session.refreshContact(sel) }
+        val c = contacts.firstOrNull { it.publicKey.contentEquals(sel.publicKey) } ?: sel
         NodeDetailSheet(
             name = c.name.ifBlank { c.keyPrefixHex },
             type = c.type,
@@ -462,6 +470,8 @@ private fun ContactsList(
             onRemove = { session.removeContact(c); detail = null },
             onRequestTelemetry = { session.requestTelemetry(c) },
             telemetry = contactTelemetry[c.keyPrefixHex],
+            onRequestMma = { session.requestContactMma(c) },
+            mma = contactMma[c.keyPrefixHex],
             onManage = if (c.type == ContactType.REPEATER || c.type == ContactType.ROOM) {
                 { manage = c; detail = null }
             } else null,

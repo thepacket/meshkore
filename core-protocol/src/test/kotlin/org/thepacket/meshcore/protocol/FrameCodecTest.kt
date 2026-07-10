@@ -691,6 +691,40 @@ class FrameCodecTest {
         assertTrue(FrameDecoder.decode(byteArrayOf(Resp.DISABLED.toByte())) is Incoming.Disabled)
     }
 
+    @Test fun getContactByKeyShape() {
+        // [cmd, pubKey(32)].
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val f = Requests.getContactByKey(key)
+        assertEquals(33, f.size)
+        assertEquals(Cmd.GET_CONTACT_BY_KEY, f[0].toInt() and 0xFF)
+        assertArrayEquals(key, f.copyOfRange(1, 33))
+    }
+
+    @Test fun hasConnectionShape() {
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val f = Requests.hasConnection(key)
+        assertEquals(33, f.size)
+        assertEquals(Cmd.HAS_CONNECTION, f[0].toInt() and 0xFF)
+        assertArrayEquals(key, f.copyOfRange(1, 33))
+    }
+
+    @Test fun sendAnonReqShape() {
+        // [cmd, pubKey(32), reqType(1), replyPathLen(1), replyPath]. Owner probe, zero-hop reply.
+        val key = ByteArray(32) { it.toByte() }
+        val f = Requests.sendAnonReq(key, AnonReqType.OWNER)
+        assertEquals(35, f.size)
+        val r = FrameReader(f)
+        assertEquals(Cmd.SEND_ANON_REQ, r.u8())
+        assertArrayEquals(key, r.bytes(32))
+        assertEquals(AnonReqType.OWNER, r.u8())
+        assertEquals(0, r.u8()) // replyPathLen
+
+        // With an explicit reply path.
+        val g = Requests.sendAnonReq(key, AnonReqType.CLOCK, byteArrayOf(0xAB.toByte(), 0xCD.toByte()))
+        assertEquals(37, g.size)
+        assertEquals(2, g[34].toInt() and 0xFF) // replyPathLen
+    }
+
     @Test fun setDevicePinShape() {
         // [cmd, pin(u32 LE)] — a 6-digit PIN.
         val f = Requests.setDevicePin(123456)

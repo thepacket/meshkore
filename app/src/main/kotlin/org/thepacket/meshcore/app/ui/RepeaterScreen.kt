@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -58,8 +59,12 @@ fun RepeaterScreen(session: MeshSession, contact: Contact, onBack: () -> Unit) {
     val self by session.self.collectAsStateWithLifecycle()
     val s = repeaters[contact.keyPrefixHex] ?: RepeaterSession()
 
-    // Silent auto-login with the remembered password (saved on the first successful login).
-    LaunchedEffect(contact.keyPrefixHex) { session.autoLoginIfSaved(contact) }
+    // Ask the device whether a session is already live (e.g. survived a BLE reconnect), then try a
+    // remembered-password auto-login. A confirmed-active session flips login to LoggedIn on its own.
+    LaunchedEffect(contact.keyPrefixHex) {
+        session.checkConnection(contact)
+        session.autoLoginIfSaved(contact)
+    }
 
     // While logged in and this screen is open, keep the session alive so it doesn't expire when
     // idle. The effect is cancelled on logout or when the screen closes (no airtime otherwise).
@@ -196,7 +201,31 @@ private fun LoginForm(session: MeshSession, contact: Contact, s: RepeaterSession
             Text("Forget saved password")
         }
     }
+
+    // Pre-login (anonymous) probes — owner/name and clock, without authenticating. Direct-route
+    // only, so these need a direct path to the repeater.
+    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+    Text("Query without logging in", style = MaterialTheme.typography.labelLarge)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { session.requestAnonOwner(contact) }, modifier = Modifier.weight(1f)) {
+            Text(if (s.anonOwner == null) "Owner" else "Refresh owner")
+        }
+        OutlinedButton(onClick = { session.requestAnonClock(contact) }, modifier = Modifier.weight(1f)) {
+            Text(if (s.anonClockSecs == null) "Clock" else "Refresh clock")
+        }
+    }
+    s.anonOwner?.let { o ->
+        if (o.nodeName.isNotBlank()) Text("Node name: ${o.nodeName}", style = MaterialTheme.typography.bodySmall)
+        Text("Owner: ${o.owner.ifBlank { "(not set)" }}", style = MaterialTheme.typography.bodySmall)
+    }
+    s.anonClockSecs?.let {
+        Text("Node clock: ${epochToLocal(it)}", style = MaterialTheme.typography.bodySmall)
+    }
 }
+
+private fun epochToLocal(secs: Long): String =
+    java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        .format(java.util.Date(secs * 1000))
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

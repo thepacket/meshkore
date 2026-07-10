@@ -33,6 +33,10 @@ import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.Acl
 import org.thepacket.meshcore.protocol.AclEntry
 import org.thepacket.meshcore.protocol.Neighbour
+import org.thepacket.meshcore.protocol.AnonReqType
+import org.thepacket.meshcore.protocol.FrameReader
+import org.thepacket.meshcore.protocol.Mma
+import org.thepacket.meshcore.protocol.MmaReading
 import org.thepacket.meshcore.protocol.Neighbours
 import org.thepacket.meshcore.protocol.OwnerInfo
 import org.thepacket.meshcore.protocol.RepeaterStats
@@ -72,6 +76,11 @@ data class RepeaterSession(
     val neighbours: List<Neighbour>? = null,  // null = not requested yet
     val acl: List<AclEntry>? = null,          // access-control list (admin only); null = not requested
     val owner: OwnerInfo? = null,             // firmware/owner info; null = not requested
+    /** Pre-login anon probe results (CMD_SEND_ANON_REQ); null = not requested. */
+    val anonOwner: OwnerInfo? = null,         // owner/name from an anonymous (no-login) query
+    val anonClockSecs: Long? = null,          // the node's clock (epoch secs) from a no-login query
+    /** Firmware-confirmed session state from HAS_CONNECTION: true/false, null = not checked. */
+    val sessionActive: Boolean? = null,
 )
 
 /**
@@ -212,6 +221,10 @@ class MeshSession(
     private val _contactTelemetry = MutableStateFlow<Map<String, List<Lpp.Reading>>>(emptyMap())
     val contactTelemetry: StateFlow<Map<String, List<Lpp.Reading>>> = _contactTelemetry.asStateFlow()
 
+    /** Remote contacts' telemetry min/max/avg over a window (GET_MMA), keyed by key-prefix hex. */
+    private val _contactMma = MutableStateFlow<Map<String, List<MmaReading>>>(emptyMap())
+    val contactMma: StateFlow<Map<String, List<MmaReading>>> = _contactMma.asStateFlow()
+
     /** Latest trace-path result (Tools → Trace path). */
     private val _traceResult = MutableStateFlow<TraceResult?>(null)
     val traceResult: StateFlow<TraceResult?> = _traceResult.asStateFlow()
@@ -262,6 +275,8 @@ class MeshSession(
     // --- internal sync/send bookkeeping ---
     private val contactAccumulator = mutableListOf<Contact>()
     private val channelAccumulator = mutableListOf<ChannelEntry>()
+    /** True between CONTACTS_START and END_OF_CONTACTS, to tell a full sync from a lone by-key reply. */
+    private var syncingContacts = false
     private var enumeratingChannels = false
     private var draining = false
     private var localIdSeq = 0L
@@ -424,9 +439,46 @@ class MeshSession(
         updateRepeater(contact.keyPrefixHex) { it.copy(login = RepeaterLogin.None) }
     }
 
-    private enum class BinKind { Neighbours, Acl, Owner }
+    private enum class BinKind { Neighbours, Acl, Owner, Mma, AnonOwner, AnonClock }
     /** The in-flight binary request (key-prefix hex + kind); only one at a time. */
     private var pendingBinaryReq: Pair<String, BinKind>? = null
+    /** Key-prefix hex of an in-flight HAS_CONNECTION check (its OK/ERR reply carries no key). */
+    @Volatile private var pendingConnectionCheck: String? = null
+
+    /**
+     * Request a contact's telemetry min/max/avg over the last [windowSecs] (GET_MMA). The reply
+     * lands in [contactMma] keyed by the contact's 6-byte key-prefix hex. Needs a read-only
+     * session with the node (sensors/repeaters/rooms).
+     */
+    fun requestContactMma(contact: Contact, windowSecs: Long = 24 * 3600) {
+        pendingBinaryReq = contact.keyPrefixHex to BinKind.Mma
+        scope.launch { runCatching { link.send(Requests.requestMma(contact.publicKey, windowSecs, 0)) } }
+    }
+
+    /**
+     * Ask the device whether it still has an active login session with [contact]. The OK/ERR reply
+     * updates that node's [RepeaterSession.sessionActive]. Skipped if another OK/ERR-eliciting
+     * command is in flight (the reply carries no tag to correlate on).
+     */
+    fun checkConnection(contact: Contact) {
+        if (pendingSettings.isNotEmpty() || pendingSends.isNotEmpty() || pendingConnectionCheck != null) return
+        val hex = contact.keyPrefixHex
+        pendingConnectionCheck = hex
+        scope.launch { runCatching { link.send(Requests.hasConnection(contact.publicKey)) } }
+        scope.launch { delay(8_000); if (pendingConnectionCheck == hex) pendingConnectionCheck = null }
+    }
+
+    /** Anonymous (no-login) owner/name query to a repeater; result lands in [RepeaterSession.anonOwner]. */
+    fun requestAnonOwner(contact: Contact) {
+        pendingBinaryReq = contact.keyPrefixHex to BinKind.AnonOwner
+        scope.launch { runCatching { link.send(Requests.sendAnonReq(contact.publicKey, AnonReqType.OWNER)) } }
+    }
+
+    /** Anonymous (no-login) clock query to a repeater; result lands in [RepeaterSession.anonClockSecs]. */
+    fun requestAnonClock(contact: Contact) {
+        pendingBinaryReq = contact.keyPrefixHex to BinKind.AnonClock
+        scope.launch { runCatching { link.send(Requests.sendAnonReq(contact.publicKey, AnonReqType.CLOCK)) } }
+    }
 
     /** Ask a repeater for its neighbour table; the result lands in [repeaters] as its neighbours. */
     fun requestRepeaterNeighbours(contact: Contact) {
@@ -512,6 +564,7 @@ class MeshSession(
         _repeaters.value = emptyMap()
         pendingLoginPw.clear()
         pendingBinaryReq = null
+        pendingConnectionCheck = null
         _tuning.value = null
         _autoAdd.value = null
         _allowedRepeatFreqs.value = emptyList()
@@ -521,12 +574,14 @@ class MeshSession(
         _deviceTimeOffsetMs.value = null
         _telemetry.value = emptyList()
         _contactTelemetry.value = emptyMap()
+        _contactMma.value = emptyMap()
         _traceResult.value = null
         pendingSettings.clear()
         lastAdvertSnrQ = null; lastAdvertRssi = null
         contactAccumulator.clear()
         channelAccumulator.clear()
         pendingSends.clear()
+        syncingContacts = false
         enumeratingChannels = false
         draining = false
     }
@@ -851,6 +906,23 @@ class MeshSession(
         scope.launch { runCatching { link.send(Requests.exportContact(c.publicKey)) } }
     }
 
+    /**
+     * Re-read a single contact's current record from the device (learned path, position, last
+     * advert) without a full resync. The reply (a lone RESP_CODE_CONTACT, or ERR if the device no
+     * longer has it) updates [contacts] in place via [upsertSingleContact].
+     */
+    fun refreshContact(c: Contact) {
+        scope.launch { runCatching { link.send(Requests.getContactByKey(c.publicKey)) } }
+    }
+
+    /** Replace (or add) one contact in the live list + aggregate from a by-key fetch reply. */
+    private fun upsertSingleContact(c: Contact) {
+        _contacts.update { list ->
+            (list.filterNot { it.publicKey.contentEquals(c.publicKey) } + c).sortedByDescending { it.lastAdvert }
+        }
+        mergeIntoAggregate(listOf(c))
+    }
+
     /** Broadcast our own advert — zero-hop (direct neighbours) or flood-routed (whole mesh). */
     fun sendSelfAdvert(flood: Boolean) {
         scope.launch { runCatching { link.send(Requests.sendSelfAdvert(flood)) } }
@@ -1007,6 +1079,24 @@ class MeshSession(
         _settingsResult.tryEmit(SettingsResult(label, ok))
     }
 
+    /** OK/ERR reply to HAS_CONNECTION: record whether the session is still active on the device. */
+    private fun resolveConnectionCheck(active: Boolean) {
+        val hex = pendingConnectionCheck ?: return
+        pendingConnectionCheck = null
+        updateRepeater(hex) {
+            // A confirmed-active session upgrades login to LoggedIn; a lost one drops it to None.
+            it.copy(sessionActive = active, login = if (active) RepeaterLogin.LoggedIn
+            else if (it.login == RepeaterLogin.LoggedIn) RepeaterLogin.None else it.login)
+        }
+    }
+
+    /** Anon owner reply payload: "node_name\nowner_info" (no firmware line, unlike GET_OWNER_INFO). */
+    private fun decodeAnonOwner(payload: ByteArray): OwnerInfo {
+        val parts = String(payload, Charsets.UTF_8).split('\n')
+        return OwnerInfo(firmwareVersion = "", nodeName = parts.getOrElse(0) { "" }.trim(),
+            owner = parts.getOrElse(1) { "" }.trim())
+    }
+
     private fun newOutgoing(convId: String, text: String) = ChatMessage(
         localId = ++localIdSeq,
         conversationId = convId,
@@ -1030,12 +1120,18 @@ class MeshSession(
                 _self.value = f.info
                 scope.launch { link.send(Requests.getContacts()) }
             }
-            is Incoming.ContactsStart -> contactAccumulator.clear()
-            is Incoming.ContactEntry -> contactAccumulator.add(f.contact)
+            is Incoming.ContactsStart -> { syncingContacts = true; contactAccumulator.clear() }
+            is Incoming.ContactEntry ->
+                // During a full GET_CONTACTS sync, accumulate; a lone RESP_CODE_CONTACT outside a
+                // sync is the reply to GET_CONTACT_BY_KEY — upsert that one contact in place.
+                if (syncingContacts) contactAccumulator.add(f.contact) else upsertSingleContact(f.contact)
             is Incoming.ContactsEnd -> {
-                _contacts.value = contactAccumulator.sortedByDescending { it.lastAdvert }
+                syncingContacts = false
+                // distinctBy guards against a by-key reply that raced into the sync window.
+                val synced = contactAccumulator.distinctBy { it.publicKey.toHex() }
+                _contacts.value = synced.sortedByDescending { it.lastAdvert }
                 // Fold this device's contacts into the persistent cross-device address book.
-                mergeIntoAggregate(contactAccumulator.toList())
+                mergeIntoAggregate(synced)
                 contactAccumulator.clear()
                 // Drop any locally-stored room history: rooms are server-owned, so we show only
                 // what the room delivers this session. (Room posts arrive later, after login.)
@@ -1092,15 +1188,29 @@ class MeshSession(
                     }
                     BinKind.Acl -> updateRepeater(hex) { it.copy(acl = Acl.decode(f.data)) }
                     BinKind.Owner -> updateRepeater(hex) { it.copy(owner = OwnerInfo.decode(f.data)) }
+                    // GET_MMA reply: [now(u32)][per-channel min/max/avg]; Mma.decode skips the 'now'.
+                    BinKind.Mma -> _contactMma.update { it + (hex to Mma.decode(f.data)) }
+                    // Anon replies are prefixed with the node's clock (u32); the rest is the payload.
+                    BinKind.AnonOwner -> {
+                        val payload = if (f.data.size > 4) f.data.copyOfRange(4, f.data.size) else ByteArray(0)
+                        updateRepeater(hex) { it.copy(anonOwner = decodeAnonOwner(payload)) }
+                    }
+                    BinKind.AnonClock -> if (f.data.size >= 4) {
+                        val clock = FrameReader(f.data).u32()
+                        updateRepeater(hex) { it.copy(anonClockSecs = clock) }
+                    }
                 }
             }
             Incoming.NoMoreMessages -> draining = false
 
             is Incoming.Sent -> onSentReply(f.result.expectedAck, f.result.estTimeoutMs)
-            Incoming.Ok ->
-                if (pendingSettings.isNotEmpty()) resolveSetting(true) // settings write ack
-                else onSendAcceptedNoAck()
+            Incoming.Ok -> when {
+                pendingConnectionCheck != null -> resolveConnectionCheck(true)
+                pendingSettings.isNotEmpty() -> resolveSetting(true) // settings write ack
+                else -> onSendAcceptedNoAck()
+            }
             is Incoming.Err -> when {
+                pendingConnectionCheck != null -> resolveConnectionCheck(false)
                 pendingSettings.isNotEmpty() -> resolveSetting(false)
                 enumeratingChannels -> finishChannelEnumeration() // err = no more channel slots
                 else -> onSendFailed()

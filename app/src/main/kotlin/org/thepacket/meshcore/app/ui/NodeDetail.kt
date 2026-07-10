@@ -37,6 +37,7 @@ import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.protocol.AdvertPathInfo
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.MmaReading
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.Lpp
 import org.thepacket.meshcore.protocol.PathDiscoveryResult
@@ -68,6 +69,9 @@ fun NodeDetailSheet(
     onRemove: (() -> Unit)? = null,
     onRequestTelemetry: (() -> Unit)? = null,
     telemetry: List<Lpp.Reading>? = null,
+    /** Telemetry min/max/avg over a window (GET_MMA); shown under the live telemetry when present. */
+    onRequestMma: (() -> Unit)? = null,
+    mma: List<MmaReading>? = null,
     onManage: (() -> Unit)? = null,
     /** Shown (with the node's coordinates) only when the node has a known position. */
     onShowOnMap: ((lat: Double, lon: Double) -> Unit)? = null,
@@ -169,7 +173,7 @@ fun NodeDetailSheet(
 
                 if (onRequestTelemetry != null) {
                     HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                    TelemetrySection(telemetry, onRequestTelemetry)
+                    TelemetrySection(telemetry, onRequestTelemetry, mma, onRequestMma)
                 }
 
                 if (onShare != null || onResetPath != null || onExport != null || onRemove != null) {
@@ -271,7 +275,12 @@ private fun AdvertPathSection(
 }
 
 @Composable
-private fun TelemetrySection(telemetry: List<Lpp.Reading>?, onRequest: () -> Unit) {
+private fun TelemetrySection(
+    telemetry: List<Lpp.Reading>?,
+    onRequest: () -> Unit,
+    mma: List<MmaReading>? = null,
+    onRequestMma: (() -> Unit)? = null,
+) {
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -294,7 +303,32 @@ private fun TelemetrySection(telemetry: List<Lpp.Reading>?, onRequest: () -> Uni
             }
         }
     }
+
+    if (onRequestMma != null) {
+        Row(
+            Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Min / Max / Avg (24h)", style = MaterialTheme.typography.labelLarge)
+            OutlinedButton(onClick = onRequestMma) { Text(if (mma == null) "Request" else "Refresh") }
+        }
+        when {
+            mma == null -> Unit
+            mma.isEmpty() -> kvHint("No min/max/avg returned (node may need a read-only login).")
+            else -> mma.forEach { r ->
+                kvRow(mmaLabel(r), "min ${fmtMma(r.min)} · max ${fmtMma(r.max)} · avg ${fmtMma(r.avg)}")
+            }
+        }
+    }
 }
+
+private fun fmtMma(v: Double): String =
+    if (v == v.toLong().toDouble()) v.toLong().toString() else "%.1f".format(v)
+
+/** Label an MMA reading by its LPP type (reuses the telemetry naming). */
+private fun mmaLabel(r: MmaReading): String =
+    telemetryLabel(Lpp.Reading(r.channel, r.type, listOf(r.avg)))
 
 @Composable
 private fun kvHint(text: String) =

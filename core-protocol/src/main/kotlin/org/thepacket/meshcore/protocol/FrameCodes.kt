@@ -152,6 +152,17 @@ object AclRole {
     }
 }
 
+/**
+ * Anonymous (pre-login) request sub-types — the first byte of a CMD_SEND_ANON_REQ payload.
+ * A value of 0 or ≥ 0x20 is instead treated as a login password by the server. The typed
+ * queries below are direct-route only (repeaters; room servers only handle login).
+ */
+object AnonReqType {
+    const val REGIONS = 0x01  // supported regions/frequencies
+    const val OWNER = 0x02    // owner info: "node_name\nowner"
+    const val CLOCK = 0x03    // "basic": the server's current clock (+ feature flags)
+}
+
 /** Binary-request sub-types (first byte of a CMD_SEND_BINARY_REQ payload). */
 object BinReqType {
     const val GET_STATUS = 0x01
