@@ -22,15 +22,18 @@ MITM-protected nodes. Seven tabs — **Chats · Heard · Packets · Stats · Map
 - **Aggregate address book** — All contacts is the deduped, persistent union of contacts from
   **every device you've connected to**; one tap **pushes the whole book** to the connected device,
   skipping duplicates.
-- **Contact actions** (long-press) — share, reset path, export, remove, request telemetry, show
-  on map, get path to node, and cached **advert path**; import from card or **QR**,
-  and share a contact as a QR.
+- **Contact actions** (long-press) — share, reset path, export, remove, request telemetry
+  (live, plus **min / max / avg** over a window), show on map, get path to node, and cached
+  **advert path**; opening a contact re-reads its current record from the device. Import from
+  card or **QR**, and share a contact as a QR.
 - **Channels** — create / edit (name + 128-bit key) / delete with slot guards; protected **Public**
   channel with one-tap restore; add community channels by **region catalog** or **`#hashtag`** key
   derivation; share/scan a channel key as a base64 QR.
 - **Room servers** — log in and read/post the shared board, with per-post authors.
-- **Repeater management** — log in; live status (battery/uptime/packets/airtime/signal/dups/errors);
-  owner/firmware; neighbours; access list; admin/CLI console.
+- **Repeater management** — log in (with an active-session check so a session that survived a
+  reconnect logs you straight back in); live status (battery/uptime/packets/airtime/signal/dups/errors);
+  owner/firmware; neighbours; access list; admin/CLI console. Pre-login **owner/clock probes**
+  query a repeater without authenticating.
 - **Remembered passwords** — silent auto-login to repeaters/rooms you've authenticated to.
 
 **Heard** — recently-heard stations with a signal-graded dot, SNR/RSSI, age, and distance; tap for
@@ -57,15 +60,16 @@ on its own.
 **Settings** — full editable device config: node name, region presets, frequency / bandwidth / SF /
 coding rate, TX power, client-repeat (with allowed-frequency guard), advertised position (typed, picked
 on a map, or phone GPS on an explicit tap), network & telemetry, tuning, auto-add, path-hash size,
-**device variables** (firmware custom vars / sensor settings), and a live **device clock** (drift vs. the
-phone + one-tap sync); plus device info, config/app-data export & import, debug logs, reboot, and factory reset.
+**device variables** (firmware custom vars / sensor settings), **pairing PIN**, and a live **device
+clock** (drift vs. the phone + one-tap sync); plus **identity backup** (export / import the node's
+private key), device info, config/app-data export & import, debug logs, reboot, and factory reset.
 
 Runtime permissions: Bluetooth (and, on Android ≤ 11, location for BLE scanning); **location** — only
 when you tap "Use current location" to set this node's position; and **camera**, only when scanning a QR.
 
-> **Not yet implemented:** dedicated support for **Sensor** nodes (environmental readings /
-> telemetry history) and a room **member-list** view. Note that a room server needs a correct
-> clock (an RTC, or a clock set via its CLI) to relay posts between members.
+> **Not yet implemented:** a dedicated **Sensor** dashboard with **time-series history** (live
+> telemetry and min/max/avg are available per contact) and a room **member-list** view. Note that
+> a room server needs a correct clock (an RTC, or a clock set via its CLI) to relay posts between members.
 
 ## Module layout
 
