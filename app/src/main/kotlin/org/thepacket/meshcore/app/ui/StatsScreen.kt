@@ -36,10 +36,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.LoRaAirtime
 import org.thepacket.meshcore.protocol.Lpp
+import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.PacketStats
+import org.thepacket.meshcore.protocol.ParsedPacket
 import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.RadioStats
 import org.thepacket.meshcore.protocol.RouteType
@@ -109,6 +112,9 @@ private fun AddressBookCard(session: MeshSession) {
 private fun TrafficCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
+    // Resolve source names from the persisted aggregate book — it's populated even before a
+    // fresh contact sync completes, unlike the live device-contacts list.
+    val contacts by session.allContacts.collectAsStateWithLifecycle()
     val windows = remember { listOf("5m" to 5 * 60_000L, "1h" to 60 * 60_000L, "All" to Long.MAX_VALUE) }
     var wIdx by remember { mutableStateOf(0) }
 
@@ -159,6 +165,69 @@ private fun TrafficCard(session: MeshSession) {
             pkts.groupingBy { it.payloadType }.eachCount().entries
                 .sortedByDescending { it.value }
                 .forEach { (type, c) -> BarRow(PayloadType.name(type), c, count) }
+
+            // Top talkers: rank source identities by packet count (+ airtime) over the window.
+            // Source = advert pubkey (adverts) or the 1-byte src hash (other packets); nodes that
+            // share a hash are grouped and labelled by their contact name(s).
+            val talkers = remember(pkts, contacts, self) {
+                val agg = HashMap<Int, DoubleArray>() // hash -> [count, airtimeMs]
+                val advNames = HashMap<Int, String>() // best name seen in an advert for this hash
+                pkts.forEach { pkt ->
+                    val p = PacketInspector.parse(pkt.raw)
+                    val h = sourceByte(p) ?: return@forEach
+                    val a = agg.getOrPut(h) { DoubleArray(2) }
+                    a[0] += 1
+                    self?.let { s -> a[1] += LoRaAirtime.airtimeMs(pkt.length, s.bwKhz, s.radioSf, s.radioCr) ?: 0.0 }
+                    // Adverts carry the node's own name — the most reliable label for that source.
+                    p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { advNames.putIfAbsent(h, it) }
+                }
+                agg.entries.sortedByDescending { it.value[0] }.take(8)
+                    .map { e -> TalkerAgg(advNames[e.key] ?: talkerLabel(e.key, contacts), e.value[0].toInt(), e.value[1]) }
+            }
+            if (talkers.isNotEmpty()) {
+                Text("Top talkers", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
+                val maxCount = talkers.first().count
+                talkers.forEach { t -> TalkerRow(t.label, t.count, maxCount, t.airtimeMs) }
+            }
+        }
+    }
+}
+
+private data class TalkerAgg(val label: String, val count: Int, val airtimeMs: Double)
+
+/** The 1-byte source identity of a packet: advert pubkey's first byte, else the src hash; null if none. */
+private fun sourceByte(p: ParsedPacket): Int? =
+    p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: p.srcHash
+
+/** Resolve a 1-byte source hash to contact name(s), or "0xNN" when unknown. */
+private fun talkerLabel(hash: Int, contacts: List<Contact>): String {
+    val names = contacts
+        .filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hash }
+        .map { it.name.ifBlank { it.keyPrefixHex } }
+    return when {
+        names.isEmpty() -> "0x%02X".format(hash)
+        names.size == 1 -> names[0]
+        else -> "${names[0]} +${names.size - 1}"
+    }
+}
+
+/** A top-talker bar: proportional to packet count, with count + airtime on the right. */
+@Composable
+private fun TalkerRow(label: String, count: Int, maxCount: Int, airtimeMs: Double) {
+    val frac = if (maxCount > 0) count.toFloat() / maxCount else 0f
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.labelSmall,
+                maxLines = 1, modifier = Modifier.weight(1f, fill = false))
+            Text("$count · %.1fs".format(airtimeMs / 1000), style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace, modifier = Modifier.padding(start = 8.dp))
+        }
+        Box(
+            Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+        ) {
+            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(MaterialTheme.colorScheme.tertiary))
         }
     }
 }
