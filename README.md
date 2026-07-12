@@ -7,7 +7,8 @@ devices over **BLE** — an alternative to the official app, built natively in
 ## Features
 
 Connect to a MeshCore device over BLE, including **PIN/passkey pairing** for
-MITM-protected nodes. Seven tabs — **Chats · Heard · Packets · Stats · Map · Tools · Settings**.
+MITM-protected nodes — or run BLE-free, **observing live packets over meshcore.ca MQTT**.
+Seven tabs — **Chats · Heard · Packets · Stats · Map · Tools · Settings**.
 
 **Chats**
 
@@ -37,18 +38,20 @@ MITM-protected nodes. Seven tabs — **Chats · Heard · Packets · Stats · Map
 - **Remembered passwords** — silent auto-login to repeaters/rooms you've authenticated to.
 
 **Heard** — recently-heard stations with a signal-graded dot, SNR/RSSI, age, and distance; tap for
-details, show on map, and get path to node.
+details, show on map, and get path to node. Fed by the device's own advert pushes **and by adverts
+observed over MQTT**.
 
 **Packet monitor** — live decoded RX feed with a filter box; deep decode: channel **decrypt**,
 **ACK match** to your own sends, trace per-hop SNRs, advert **clock skew** + distance, **link margin**,
-airtime estimate, and flood-rebroadcast count.
+airtime estimate, and flood-rebroadcast count. Packets arrive from the connected device and/or the
+**MQTT** feed.
 
 **Statistics** — rolling noise-floor graph; radio / device / packet counters; a **Contacts & channels**
 card (address-book size, device contacts and channels vs. capacity); **My Telemetry**; and a
 **Traffic** analysis card over a persisted, cross-session packet history (5m / 1h / all windows):
 capture rate, estimated **channel-busy** (airtime ÷ window), flood/direct split, duplicate
 (flood-rebroadcast) share, a **packets-over-time** chart, payload-type mix, and **top talkers**
-(busiest sources by packets + airtime, name-resolved).
+(busiest sources by packets + airtime, name-resolved); with a one-tap **clear** to reset the history.
 
 **Map** — OpenStreetMap plot of positioned nodes drawn from the full address book: typed markers,
 screen-space clustering, labels, and a tap-for-details sheet. Read-only — never reads the phone's GPS
@@ -70,6 +73,9 @@ on a map, or phone GPS on an explicit tap), network & telemetry, tuning, auto-ad
 **device variables** (firmware custom vars / sensor settings), **pairing PIN**, and a live **device
 clock** (drift vs. the phone + one-tap sync); plus **identity backup** (export / import the node's
 private key), device info, config/app-data export & import, debug logs, reboot, and factory reset.
+Also here: **live packets over MQTT** — optionally subscribe to the **meshcore.ca** feed (broker +
+region picker, token auth) to inject observed packets into the packet monitor, Heard list, traffic
+stats, and topology, with or without a BLE connection.
 
 Runtime permissions: Bluetooth (and, on Android ≤ 11, location for BLE scanning); **location** — only
 when you tap "Use current location" to set this node's position; and **camera**, only when scanning a QR.
