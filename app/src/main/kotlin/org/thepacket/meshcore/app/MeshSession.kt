@@ -329,6 +329,17 @@ class MeshSession(
     fun refreshTelemetry() = scope.launch { runCatching { link.send(Requests.selfTelemetry()) } }.let {}
 
     /**
+     * Inject an externally-sourced RX packet (e.g. from the meshcore.ca MQTT feed) into the live
+     * packet feed + persisted history, so the packet monitor and analytics include it. Works with
+     * or without a BLE link (the session outlives any single connection).
+     */
+    fun injectPacket(log: RxLog) {
+        _packets.update { (listOf(log) + it).take(MAX_PACKETS) }
+        _packetHistory.update { (listOf(log) + it).take(MAX_PACKET_HISTORY) }
+        schedulePacketSave()
+    }
+
+    /**
      * Request a remote contact's telemetry. The device replies SENT immediately; the
      * readings arrive later (or not, if unreachable) and land in [contactTelemetry]
      * keyed by the contact's 6-byte key-prefix hex.

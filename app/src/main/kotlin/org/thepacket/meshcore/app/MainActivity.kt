@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
                             if (state.scanning) vm.stopScan() else permLauncher.launch(blePermissions)
                         },
                         onConnect = vm::connect,
+                        onObserve = vm::enterObserver,
                     )
                     is Screen.Main -> MainScaffold(
                         tab = state.tab,

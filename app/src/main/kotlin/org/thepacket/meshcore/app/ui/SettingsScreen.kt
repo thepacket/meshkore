@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,7 +55,10 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.thepacket.meshcore.app.MeshConnection
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.app.MqttPrefs
+import org.thepacket.meshcore.app.MqttStatus
 import org.thepacket.meshcore.app.NotifyPrefs
 import org.thepacket.meshcore.protocol.AutoAdd
 import org.thepacket.meshcore.protocol.SelfInfo
@@ -141,8 +145,16 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
     var showLogs by remember { mutableStateOf(false) }
 
     if (self == null) {
-        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Reading settings…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        // No BLE device: device config isn't available, but the MQTT feed can still be configured
+        // (it works standalone), so surface just that card here.
+        Column(
+            modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("No device connected — connect one for full settings. The MQTT live-packet feed " +
+                "works without a device:", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall)
+            MqttCard(ctx)
         }
         return
     }
@@ -171,6 +183,9 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             SwitchRow("Direct messages", notifyDirect) { notifyDirect = it; notifyPrefs.notifyDirect = it }
             SwitchRow("Channel messages", notifyChannels) { notifyChannels = it; notifyPrefs.notifyChannels = it }
         }
+
+        // ---- MQTT (meshcore.ca live packets) ----
+        MqttCard(ctx)
 
         // ---- Radio ----
         val bwList = remember(self) { (BW_OPTIONS + self.bwKhz).distinct().sorted() }
@@ -579,6 +594,55 @@ private fun ImportPrivateKeyDialog(onDismiss: () -> Unit, onImport: (ByteArray) 
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** Configure + monitor the optional meshcore.ca MQTT live-packet subscription. */
+@Composable
+private fun MqttCard(ctx: Context) {
+    val prefs = remember { MqttPrefs(ctx) }
+    var enabled by remember { mutableStateOf(prefs.enabled) }
+    var url by remember { mutableStateOf(prefs.brokerUrl) }
+    var region by remember { mutableStateOf(prefs.region) }
+    var user by remember { mutableStateOf(prefs.username) }
+    var pass by remember { mutableStateOf(prefs.password) }
+    val status by MeshConnection.mqtt.status.collectAsStateWithLifecycle()
+    val received by MeshConnection.mqtt.received.collectAsStateWithLifecycle()
+    fun save() { prefs.brokerUrl = url; prefs.region = region; prefs.username = user; prefs.password = pass }
+    val regions = MqttPrefs.REGIONS
+    SectionCard("MQTT — meshcore.ca live packets") {
+        Text(
+            "Subscribe to live packets from meshcore.ca and merge them into the packet monitor, " +
+                "Traffic and topology. Works without a connected device. The broker requires auth — " +
+                "put your token in Password (get it from meshcore.ca's setup tools).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+        SwitchRow("Enabled", enabled) { on -> enabled = on; save(); MeshConnection.setMqttEnabled(ctx, on) }
+        Field("Broker URL", url) { url = it }
+        EnumDropdown("Region", regions.map { "${it.first} (${it.second})" },
+            regions.indexOfFirst { it.second == region }.coerceAtLeast(0)) { i ->
+            region = regions[i].second
+            prefs.region = region
+            if (enabled) MeshConnection.setMqttEnabled(ctx, true) // reconnect to the new topic
+        }
+        Field("Username", user) { user = it }
+        OutlinedTextField(
+            value = pass, onValueChange = { pass = it },
+            label = { Text("Password / token") },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        val statusText = when (val s = status) {
+            MqttStatus.Disconnected -> "Disconnected"
+            MqttStatus.Connecting -> "Connecting…"
+            is MqttStatus.Connected -> "Connected · $received packets"
+            is MqttStatus.Error -> "Error: ${s.message}"
+        }
+        KeyVal("Status", statusText)
+        if (enabled) {
+            SaveRow(label = "Apply / reconnect") { save(); MeshConnection.setMqttEnabled(ctx, true) }
+        }
+    }
 }
 
 // ---- reusable bits --------------------------------------------------------

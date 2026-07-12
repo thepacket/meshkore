@@ -37,6 +37,8 @@ data class UiState(
     val chatsTab: Int = 0,
     /** When set, the Map tab should centre on these coordinates (lat, lon in degrees). */
     val mapFocus: Pair<Double, Double>? = null,
+    /** Observer mode: viewing the app (e.g. the MQTT feed) with no BLE device connected. */
+    val observing: Boolean = false,
 )
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
@@ -59,7 +61,8 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { st ->
                     val screen = when {
                         s == LinkState.Connected && st.screen is Screen.Connect -> Screen.Main
-                        s == LinkState.Disconnected || s == LinkState.Failed -> Screen.Connect
+                        // Don't kick an observer back to Connect on a (non-)disconnect.
+                        (s == LinkState.Disconnected || s == LinkState.Failed) && !st.observing -> Screen.Connect
                         else -> st.screen
                     }
                     st.copy(linkState = s, screen = screen)
@@ -120,8 +123,11 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
         stopConnectionService()
         viewModelScope.launch { runCatching { link.disconnect() } }
         session.reset()
-        _ui.update { it.copy(screen = Screen.Connect) }
+        _ui.update { it.copy(screen = Screen.Connect, observing = false) }
     }
+
+    /** Enter the app with no BLE device — for watching the MQTT live-packet feed standalone. */
+    fun enterObserver() = _ui.update { it.copy(screen = Screen.Main, observing = true) }
 
     private fun startConnectionService() {
         val app = getApplication<Application>()

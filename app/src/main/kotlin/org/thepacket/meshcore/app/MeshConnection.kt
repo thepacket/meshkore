@@ -26,6 +26,17 @@ object MeshConnection {
     lateinit var session: MeshSession
         private set
 
+    /** Optional meshcore.ca live-packet subscription; injects into [session] with or without BLE. */
+    lateinit var mqtt: MqttPacketSource
+        private set
+
+    /** Enable/disable the MQTT feed and persist the choice. */
+    fun setMqttEnabled(context: Context, enabled: Boolean) {
+        val prefs = MqttPrefs(context)
+        prefs.enabled = enabled
+        if (enabled) mqtt.start(prefs.brokerUrl, prefs.topic, prefs.username, prefs.password) else mqtt.stop()
+    }
+
     /** Idempotent — safe to call from both the Application and the ViewModel. */
     @Synchronized
     fun init(context: Context) {
@@ -34,6 +45,8 @@ object MeshConnection {
         scanner = CompanionScanner(app)
         link = NordicMeshCoreLink(app)
         session = MeshSession(link, scope, ChatStore(app), AdminPrefs(app), ContactStore(app), PacketStore(app))
+        mqtt = MqttPacketSource(session::injectPacket)
+        MqttPrefs(app).let { if (it.enabled) mqtt.start(it.brokerUrl, it.topic, it.username, it.password) }
         initialized = true
     }
 }

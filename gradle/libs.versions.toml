@@ -12,6 +12,11 @@ coroutines = "1.8.1"
 osmdroid = "6.1.20"
 # zxing-android-embedded (Apache-2.0) — offline QR generate + scan, no Play Services.
 zxing = "4.3.0"
+# HiveMQ MQTT Client (Apache-2.0) — robust MQTT over WebSocket+TLS on Android for the optional
+# meshcore.ca live-packet subscription (Paho's WebSocket transport is broken on Android).
+hivemq = "1.3.3"
+# netty-codec-http is an *optional* HiveMQ dep required for WebSocket; pin to HiveMQ's Netty version.
+netty = "4.1.99.Final"
 junit = "4.13.2"
 
 [libraries]
@@ -33,6 +38,8 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 zxing-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxing" }
+hivemq-mqtt = { group = "com.hivemq", name = "hivemq-mqtt-client", version.ref = "hivemq" }
+netty-codec-http = { group = "io.netty", name = "netty-codec-http", version.ref = "netty" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

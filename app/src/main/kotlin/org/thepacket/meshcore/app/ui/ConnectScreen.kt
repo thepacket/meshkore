@@ -35,6 +35,7 @@ fun ConnectScreen(
     state: UiState,
     onScanToggle: () -> Unit,
     onConnect: (ScannedDevice) -> Unit,
+    onObserve: () -> Unit = {},
 ) {
     Scaffold(topBar = { TopAppBar(title = { Text("MeshKore") }) }) { pad ->
         Column(
@@ -57,6 +58,9 @@ fun ConnectScreen(
                 Text("Pairing — enter the device PIN (default 123456) when prompted.")
             state.error?.let { Text("⚠ $it", color = MaterialTheme.colorScheme.error) }
             DeviceList(state.devices, onConnect)
+            OutlinedButton(onClick = onObserve, modifier = Modifier.fillMaxWidth()) {
+                Text("Observe via MQTT (no device)")
+            }
         }
     }
 }
