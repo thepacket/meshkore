@@ -345,6 +345,33 @@ class MeshSession(
         _packets.update { (listOf(log) + it).take(MAX_PACKETS) }
         _packetHistory.update { (listOf(log) + it).take(MAX_PACKET_HISTORY) }
         schedulePacketSave()
+        // An observed ADVERT is a station heard on the air — feed it into the Heard list too,
+        // exactly like the device's own AdvertHeard/NewAdvert pushes do over BLE. Adverts carry
+        // the full 32-byte public key (and optionally a name/type/location) in the clear.
+        if (log.payloadType == PayloadType.ADVERT) injectAdvertToHeard(log)
+    }
+
+    /** Decode an observed ADVERT packet and upsert the station into the Heard list. */
+    private fun injectAdvertToHeard(log: RxLog) {
+        val p = PacketInspector.parse(log.raw)
+        val key = p.advertPubKey ?: return
+        val hex = key.toHex()
+        // Prefer the advert's own name; else a known contact's name; else the hex prefix (the
+        // Heard UI re-resolves hex-only names against the aggregate book anyway).
+        val known = _contacts.value.firstOrNull { it.publicKey.contentEquals(key) }
+            ?: _allContacts.value.firstOrNull { it.publicKey.contentEquals(key) }
+        val name = p.advertName?.takeIf { it.isNotBlank() } ?: known?.name ?: hex.take(12)
+        upsertHeard(
+            HeardEntry(
+                pubKeyHex = hex,
+                name = name,
+                type = p.advertType ?: known?.type ?: 0,
+                lastHeardMs = log.receivedAtMs,
+                snrQ = log.snrQ, rssi = log.rssi,
+                gpsLat = p.advertLat ?: known?.gpsLat ?: 0,
+                gpsLon = p.advertLon ?: known?.gpsLon ?: 0,
+            )
+        )
     }
 
     /**
