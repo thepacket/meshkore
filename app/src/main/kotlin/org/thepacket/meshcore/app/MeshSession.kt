@@ -325,6 +325,14 @@ class MeshSession(
         startStatsPolling()
     }
 
+    /** Clear the traffic analytics: the persisted packet history + the live RX feed. */
+    fun clearPacketHistory() {
+        packetSaveJob?.cancel(); packetSaveJob = null
+        _packetHistory.value = emptyList()
+        _packets.value = emptyList()
+        packetStore?.save(emptyList())
+    }
+
     /** Re-request this node's own telemetry. */
     fun refreshTelemetry() = scope.launch { runCatching { link.send(Requests.selfTelemetry()) } }.let {}
 

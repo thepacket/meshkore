@@ -4,8 +4,7 @@ import android.content.Context
 
 /**
  * Settings for the optional meshcore.ca live-packet subscription (MQTT over WebSocket+TLS).
- * Anonymous read (blank credentials); the broker URL and topic filter are user-editable so a
- * different region/IATA or the backup broker can be used.
+ * The broker is chosen from a fixed list (its URL is hidden); the region picks the topic.
  */
 class MqttPrefs(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("mqtt", Context.MODE_PRIVATE)
@@ -14,10 +13,13 @@ class MqttPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_ENABLED, false)
         set(v) { prefs.edit().putBoolean(KEY_ENABLED, v).apply() }
 
-    /** Full WebSocket URL of the broker. */
-    var brokerUrl: String
-        get() = prefs.getString(KEY_URL, DEFAULT_URL) ?: DEFAULT_URL
-        set(v) { prefs.edit().putString(KEY_URL, v.trim()).apply() }
+    /** Index into [BROKERS] of the selected broker. */
+    var broker: Int
+        get() = prefs.getInt(KEY_BROKER, 0).coerceIn(BROKERS.indices)
+        set(v) { prefs.edit().putInt(KEY_BROKER, v).apply() }
+
+    /** WebSocket URL of the selected broker (not shown to the user). */
+    val brokerUrl: String get() = BROKERS[broker].second
 
     /** Selected region IATA code ("+" = all regions). */
     var region: String
@@ -38,8 +40,13 @@ class MqttPrefs(context: Context) {
         set(v) { prefs.edit().putString(KEY_PASS, v.trim()).apply() }
 
     companion object {
-        const val DEFAULT_URL = "wss://mqtt1.meshcore.ca:443/mqtt"
         const val DEFAULT_REGION = "YOW" // Ottawa
+
+        /** Selectable brokers as (label, hidden URL). */
+        val BROKERS: List<Pair<String, String>> = listOf(
+            "Primary" to "wss://mqtt1.meshcore.ca:443/mqtt",
+            "Secondary" to "wss://mqtt2.meshcore.ca:443/mqtt",
+        )
 
         /** Selectable regions as (city, IATA); "+" = all regions (MQTT single-level wildcard). */
         val REGIONS: List<Pair<String, String>> = listOf(
@@ -54,7 +61,7 @@ class MqttPrefs(context: Context) {
             "Winnipeg" to "YWG",
         )
         private const val KEY_ENABLED = "enabled"
-        private const val KEY_URL = "url"
+        private const val KEY_BROKER = "broker"
         private const val KEY_REGION = "region"
         private const val KEY_USER = "user"
         private const val KEY_PASS = "pass"

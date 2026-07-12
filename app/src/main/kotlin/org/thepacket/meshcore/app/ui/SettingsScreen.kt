@@ -601,13 +601,14 @@ private fun ImportPrivateKeyDialog(onDismiss: () -> Unit, onImport: (ByteArray) 
 private fun MqttCard(ctx: Context) {
     val prefs = remember { MqttPrefs(ctx) }
     var enabled by remember { mutableStateOf(prefs.enabled) }
-    var url by remember { mutableStateOf(prefs.brokerUrl) }
+    var broker by remember { mutableIntStateOf(prefs.broker) }
     var region by remember { mutableStateOf(prefs.region) }
     var user by remember { mutableStateOf(prefs.username) }
     var pass by remember { mutableStateOf(prefs.password) }
     val status by MeshConnection.mqtt.status.collectAsStateWithLifecycle()
     val received by MeshConnection.mqtt.received.collectAsStateWithLifecycle()
-    fun save() { prefs.brokerUrl = url; prefs.region = region; prefs.username = user; prefs.password = pass }
+    fun save() { prefs.broker = broker; prefs.region = region; prefs.username = user; prefs.password = pass }
+    val brokers = MqttPrefs.BROKERS
     val regions = MqttPrefs.REGIONS
     SectionCard("MQTT — meshcore.ca live packets") {
         Text(
@@ -618,7 +619,11 @@ private fun MqttCard(ctx: Context) {
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
         SwitchRow("Enabled", enabled) { on -> enabled = on; save(); MeshConnection.setMqttEnabled(ctx, on) }
-        Field("Broker URL", url) { url = it }
+        EnumDropdown("Broker", brokers.map { it.first }, broker.coerceIn(brokers.indices)) { i ->
+            broker = i
+            prefs.broker = i
+            if (enabled) MeshConnection.setMqttEnabled(ctx, true) // reconnect to the chosen broker
+        }
         EnumDropdown("Region", regions.map { "${it.first} (${it.second})" },
             regions.indexOfFirst { it.second == region }.coerceAtLeast(0)) { i ->
             region = regions[i].second

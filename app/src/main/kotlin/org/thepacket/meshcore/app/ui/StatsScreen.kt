@@ -15,12 +15,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -119,18 +122,37 @@ private fun TrafficCard(session: MeshSession) {
     val contacts by session.allContacts.collectAsStateWithLifecycle()
     val windows = remember { listOf("5m" to 5 * 60_000L, "1h" to 60 * 60_000L, "All" to Long.MAX_VALUE) }
     var wIdx by remember { mutableStateOf(0) }
+    var confirmClear by remember { mutableStateOf(false) }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("Traffic", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     windows.forEachIndexed { i, (label, _) ->
                         androidx.compose.material3.FilterChip(
                             selected = wIdx == i, onClick = { wIdx = i }, label = { Text(label) })
                     }
+                    IconButton(onClick = { confirmClear = true }) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = "Clear traffic history")
+                    }
                 }
+            }
+            if (confirmClear) {
+                AlertDialog(
+                    onDismissRequest = { confirmClear = false },
+                    title = { Text("Clear traffic history?") },
+                    text = { Text("Discards the recorded packet history that the traffic stats, chart and " +
+                        "top talkers are built from. The device isn't affected; new packets re-accumulate.") },
+                    confirmButton = {
+                        TextButton(onClick = { confirmClear = false; session.clearPacketHistory() }) {
+                            Text("Clear", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+                )
             }
 
             val now = System.currentTimeMillis()
