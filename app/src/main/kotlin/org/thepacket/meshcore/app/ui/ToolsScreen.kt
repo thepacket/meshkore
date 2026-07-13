@@ -56,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.ble.LinkState
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.DiscoveredNode
@@ -78,6 +80,9 @@ fun ToolsContent(
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
 ) {
     val contacts by session.contacts.collectAsStateWithLifecycle()
+    val linkState by session.linkState.collectAsStateWithLifecycle()
+    // Most tools drive the connected companion over BLE; without one they're inert, so grey them out.
+    val connected = linkState == LinkState.Connected
     var open by remember { mutableStateOf<String?>(null) }
     val ctx = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
@@ -100,24 +105,32 @@ fun ToolsContent(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                if (!connected) {
+                    Text(
+                        "Connect a companion device to use these tools. Mesh topology works offline.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
                 ToolRow(Icons.Default.Route, "Trace path",
-                    "Trace a path through chosen repeaters; see each hop's SNR.") { open = "trace" }
+                    "Trace a path through chosen repeaters; see each hop's SNR.", enabled = connected) { open = "trace" }
                 ToolRow(Icons.Default.Sensors, "Discover nodes",
-                    "Find nearby (one-hop) nodes — repeaters, room servers, sensors and companions.") { open = "discover" }
+                    "Find nearby (one-hop) nodes — repeaters, room servers, sensors and companions.", enabled = connected) { open = "discover" }
                 ToolRow(Icons.Default.Campaign, "Advert — Zero Hop",
-                    "Announce this node to direct (one-hop) neighbours.") {
+                    "Announce this node to direct (one-hop) neighbours.", enabled = connected) {
                     session.sendSelfAdvert(flood = false); notify("Zero-hop advert sent")
                 }
                 ToolRow(Icons.Default.Campaign, "Advert — Flood Routed",
-                    "Announce this node across the whole mesh (flood-routed).") {
+                    "Announce this node across the whole mesh (flood-routed).", enabled = connected) {
                     session.sendSelfAdvert(flood = true); notify("Flood advert sent")
                 }
                 ToolRow(Icons.Default.ContentCopy, "Advert — To Clipboard",
-                    "Copy this node's advert card to the clipboard for sharing.") {
+                    "Copy this node's advert card to the clipboard for sharing.", enabled = connected) {
                     session.exportSelfAdvert()
                 }
                 ToolRow(Icons.Default.DataObject, "Raw data",
-                    "Send a raw custom-payload packet to a contact, and view received raw data.") {
+                    "Send a raw custom-payload packet to a contact, and view received raw data.", enabled = connected) {
                     open = "rawdata"
                 }
                 ToolRow(Icons.Default.Hub, "Mesh topology",
@@ -285,10 +298,17 @@ private fun copyToClipboard(ctx: android.content.Context, label: String, text: S
 }
 
 @Composable
-private fun ToolRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+private fun ToolRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Card(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick)) {
+        // Grey the whole row when the action needs a companion we don't have.
         Row(
-            Modifier.fillMaxWidth().padding(14.dp),
+            Modifier.fillMaxWidth().padding(14.dp).alpha(if (enabled) 1f else 0.38f),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {

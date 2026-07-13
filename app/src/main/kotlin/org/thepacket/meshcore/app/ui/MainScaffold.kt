@@ -53,6 +53,10 @@ fun MainScaffold(
     onMapFocusConsumed: () -> Unit = {},
     chatsTab: Int = 0,
     onChatsTab: (Int) -> Unit = {},
+    packetFilter: PacketFilter = PacketFilter(),
+    onPacketFilter: (PacketFilter) -> Unit = {},
+    packetGroupByHash: Boolean = false,
+    onPacketGroupByHash: (Boolean) -> Unit = {},
 ) {
     val title = when (tab) {
         MainTab.Chats -> self?.name?.ifBlank { "MeshKore" } ?: "MeshKore"
@@ -121,7 +125,11 @@ fun MainScaffold(
         when (tab) {
             MainTab.Chats -> HomeContent(session, self, channels, contacts, onOpenConversation, m, onShowOnMap, chatsTab, onChatsTab)
             MainTab.Heard -> HeardContent(heard, contacts, self, session, m, onShowOnMap)
-            MainTab.Packets -> PacketMonitorContent(packets, contacts, self, session, m, onShowOnMap)
+            MainTab.Packets -> PacketMonitorContent(
+                packets, contacts, self, session, m, onShowOnMap,
+                filter = packetFilter, onFilterChange = onPacketFilter,
+                groupByHash = packetGroupByHash, onGroupByHashChange = onPacketGroupByHash,
+            )
             MainTab.Stats -> StatsContent(session, radio, core, packetStats, noiseHistory, telemetry, session::refreshTelemetry, m)
             MainTab.Map -> MapContent(self, allContacts, heard, m, focus = mapFocus, onFocusConsumed = onMapFocusConsumed)
             MainTab.Tools -> ToolsContent(session, self, m, onShowOnMap)

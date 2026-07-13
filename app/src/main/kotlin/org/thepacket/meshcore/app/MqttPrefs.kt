@@ -18,8 +18,8 @@ class MqttPrefs(context: Context) {
         get() = prefs.getInt(KEY_BROKER, 0).coerceIn(BROKERS.indices)
         set(v) { prefs.edit().putInt(KEY_BROKER, v).apply() }
 
-    /** WebSocket URL of the selected broker (not shown to the user). */
-    val brokerUrl: String get() = BROKERS[broker].second
+    /** All broker URLs, in list order — the feed fails over across these starting from [broker]. */
+    val brokerUrls: List<String> get() = BROKERS.map { it.second }
 
     /** Selected region IATA code ("+" = all regions). */
     var region: String

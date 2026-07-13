@@ -125,6 +125,10 @@ class MainActivity : ComponentActivity() {
                         onMapFocusConsumed = vm::consumeMapFocus,
                         chatsTab = state.chatsTab,
                         onChatsTab = vm::setChatsTab,
+                        packetFilter = state.packetFilter,
+                        onPacketFilter = vm::setPacketFilter,
+                        packetGroupByHash = state.packetGroupByHash,
+                        onPacketGroupByHash = vm::setPacketGroupByHash,
                     )
                     is Screen.Conversation -> {
                         // A room-server conversation gets a login banner + per-post authors.

@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,18 +20,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.ChannelEntry
@@ -43,6 +56,7 @@ import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.GroupCipher
 import org.thepacket.meshcore.protocol.LoRaAirtime
 import org.thepacket.meshcore.protocol.PacketInspector
@@ -64,35 +78,60 @@ fun PacketMonitorContent(
     session: MeshSession,
     modifier: Modifier = Modifier,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+    // Hoisted so filters + grouping persist across tab switches (owned by the ViewModel).
+    filter: PacketFilter = PacketFilter(),
+    onFilterChange: (PacketFilter) -> Unit = {},
+    groupByHash: Boolean = false,
+    onGroupByHashChange: (Boolean) -> Unit = {},
 ) {
     var detail by remember { mutableStateOf<RxLog?>(null) }
-    var query by remember { mutableStateOf("") }
+    var showFilters by remember { mutableStateOf(false) }
+    // Which hash-groups are expanded (default collapsed). Keyed by payload fingerprint.
+    val expandedGroups = remember { mutableStateMapOf<Long, Boolean>() }
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val channels by session.channels.collectAsStateWithLifecycle()
     val messages by session.messages.collectAsStateWithLifecycle()
 
-    // Text filter over the live feed: matches the type, route, source, and path hop names.
-    val filtered = remember(packets, query, contacts, self) {
-        val q = query.trim()
-        if (q.isEmpty()) packets
-        else packets.filter { log ->
-            val p = PacketInspector.parse(log.raw)
-            val hay = buildString {
-                append(log.typeName); append(' '); append(log.routeName); append(' ')
-                rowSource(p, contacts, self)?.let { append(it); append(' ') }
-                p.pathHashes.forEach { append(hopLabel(it, contacts, self)); append(' ') }
-                p.destHash?.let { append(hopLabel(it, contacts, self)) }
+    // Apply the field filters (card) to the live feed.
+    val filtered = remember(packets, filter) {
+        packets.filter { log -> filter.matches(log, PacketInspector.parse(log.raw)) }
+    }
+
+    // When grouping is on, fold packets sharing a payload fingerprint (flood rebroadcasts of the
+    // same content) into one group. Groups keep first-seen order (newest activity first); the
+    // representative shown when collapsed is the earliest received copy.
+    val groups = remember(filtered, groupByHash) {
+        if (!groupByHash) emptyList()
+        else {
+            val byHash = LinkedHashMap<Long, MutableList<RxLog>>()
+            for (log in filtered) byHash.getOrPut(payloadFingerprint(log)) { mutableListOf() }.add(log)
+            byHash.map { (h, members) ->
+                PacketGroup(h, members.minByOrNull { it.receivedAtMs } ?: members.first(), members)
             }
-            hay.contains(q, ignoreCase = true)
         }
     }
 
     Column(modifier.fillMaxSize()) {
         if (packets.isNotEmpty()) {
-            PacketSearchField(
-                query = query, onQueryChange = { query = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            )
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Toggle button: filled when grouping is on, outlined when off.
+                if (groupByHash) {
+                    Button(onClick = { onGroupByHashChange(false) }) { Text("Group by hash") }
+                } else {
+                    OutlinedButton(onClick = { onGroupByHashChange(true) }) { Text("Group by hash") }
+                }
+                OutlinedButton(onClick = { showFilters = true }) {
+                    Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp),
+                        tint = if (filter.isActive) MaterialTheme.colorScheme.primary
+                        else LocalContentColor.current)
+                    Spacer(Modifier.size(6.dp))
+                    Text(if (filter.isActive) "Filters •" else "Filters")
+                }
+            }
         }
         if (packets.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
@@ -100,7 +139,7 @@ fun PacketMonitorContent(
             }
         } else if (filtered.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                Text("No packets match \"$query\".", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                Text("No packets match the filters.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             }
         } else {
             LazyColumn(
@@ -108,8 +147,33 @@ fun PacketMonitorContent(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(filtered, key = { System.identityHashCode(it) }) { p ->
-                    PacketRow(p, contacts, self) { detail = p }
+                if (groupByHash) {
+                    items(groups, key = { it.hash }) { g ->
+                        if (g.members.size == 1) {
+                            PacketRow(g.rep, contacts, self) { detail = g.rep }
+                        } else {
+                            val expanded = expandedGroups[g.hash] == true
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                PacketRow(
+                                    g.rep, contacts, self,
+                                    badge = "×${g.members.size}",
+                                    expanded = expanded,
+                                    onToggle = { expandedGroups[g.hash] = !expanded },
+                                ) { detail = g.rep }
+                                if (expanded) {
+                                    g.members.filter { it !== g.rep }.forEach { m ->
+                                        Box(Modifier.padding(start = 16.dp)) {
+                                            PacketRow(m, contacts, self) { detail = m }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    items(filtered, key = { System.identityHashCode(it) }) { p ->
+                        PacketRow(p, contacts, self) { detail = p }
+                    }
                 }
             }
         }
@@ -126,6 +190,14 @@ fun PacketMonitorContent(
             pathResult = srcKey?.let { pathDiscovery[it.copyOf(6).toHex()] },
             onDiscoverPath = srcKey?.let { key -> { session.discoverPath(key) } },
         ) { detail = null }
+    }
+
+    if (showFilters) {
+        PacketFilterDialog(
+            initial = filter,
+            onApply = { onFilterChange(it); showFilters = false },
+            onDismiss = { showFilters = false },
+        )
     }
 }
 
@@ -375,8 +447,19 @@ private fun typeLabel(type: Int) = when (type) {
 private fun epoch(sec: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(sec * 1000))
 
+/** A set of packets sharing a payload fingerprint; [rep] is the earliest received copy. */
+private data class PacketGroup(val hash: Long, val rep: RxLog, val members: List<RxLog>)
+
 @Composable
-private fun PacketRow(p: RxLog, contacts: List<Contact>, self: SelfInfo?, onClick: () -> Unit) {
+private fun PacketRow(
+    p: RxLog,
+    contacts: List<Contact>,
+    self: SelfInfo?,
+    badge: String? = null,           // e.g. "×3" — a hash-group summary count
+    expanded: Boolean = false,
+    onToggle: (() -> Unit)? = null,  // non-null => show an expand/collapse chevron
+    onClick: () -> Unit,
+) {
     val parsed = remember(p) { PacketInspector.parse(p.raw) }
     val source = rowSource(parsed, contacts, self)
     val selfHasGps = self != null && (self.advLat != 0 || self.advLon != 0)
@@ -388,7 +471,7 @@ private fun PacketRow(p: RxLog, contacts: List<Contact>, self: SelfInfo?, onClic
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(10.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(start = 12.dp, end = if (onToggle != null) 4.dp else 12.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -406,6 +489,15 @@ private fun PacketRow(p: RxLog, contacts: List<Contact>, self: SelfInfo?, onClic
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
         }
+        if (badge != null) {
+            Box(
+                Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
+                Text(badge, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold)
+            }
+        }
         Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
             Text(clockTime(p.receivedAtMs), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
@@ -415,6 +507,14 @@ private fun PacketRow(p: RxLog, contacts: List<Contact>, self: SelfInfo?, onClic
             if (distanceKm != null) {
                 Text(fmtDistance(distanceKm), style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary)
+            }
+        }
+        if (onToggle != null) {
+            IconButton(onClick = onToggle, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                )
             }
         }
     }
@@ -466,23 +566,174 @@ private fun TypePill(type: Int, label: String) {
     }
 }
 
-/** Filter box over the live feed (the standalone UI's "path search", widened to any field). */
+/**
+ * Field filters for the packet feed. Each group is a "match any of these" set (empty = don't
+ * constrain); numeric fields are inclusive min/max bounds (null = open). Groups combine with AND.
+ */
+data class PacketFilter(
+    val payloadTypes: Set<Int> = emptySet(),   // RxLog.payloadType
+    val nodeTypes: Set<Int> = emptySet(),      // advert type (ADVERT packets only)
+    val routes: Set<String> = emptySet(),      // RxLog.routeName ("flood"/"direct")
+    val snrMin: Double? = null, val snrMax: Double? = null,
+    val rssiMin: Int? = null, val rssiMax: Int? = null,
+    val lenMin: Int? = null, val lenMax: Int? = null,
+    val hopsMin: Int? = null, val hopsMax: Int? = null,
+    val withPositionOnly: Boolean = false,
+) {
+    val isActive: Boolean get() = payloadTypes.isNotEmpty() || nodeTypes.isNotEmpty() || routes.isNotEmpty() ||
+        snrMin != null || snrMax != null || rssiMin != null || rssiMax != null ||
+        lenMin != null || lenMax != null || hopsMin != null || hopsMax != null || withPositionOnly
+
+    fun matches(log: RxLog, p: ParsedPacket): Boolean {
+        if (payloadTypes.isNotEmpty() && log.payloadType !in payloadTypes) return false
+        if (routes.isNotEmpty() && log.routeName !in routes) return false
+        // Node type is only carried by ADVERT packets — selecting any narrows the feed to matching adverts.
+        if (nodeTypes.isNotEmpty() && (p.advertType == null || p.advertType !in nodeTypes)) return false
+        snrMin?.let { if (log.snrDb < it) return false }
+        snrMax?.let { if (log.snrDb > it) return false }
+        rssiMin?.let { if (log.rssi < it) return false }
+        rssiMax?.let { if (log.rssi > it) return false }
+        lenMin?.let { if (log.length < it) return false }
+        lenMax?.let { if (log.length > it) return false }
+        val hops = p.pathHashes.size
+        hopsMin?.let { if (hops < it) return false }
+        hopsMax?.let { if (hops > it) return false }
+        if (withPositionOnly) {
+            val lat = p.advertLat; val lon = p.advertLon
+            if (lat == null || lon == null || (lat == 0 && lon == 0)) return false
+        }
+        return true
+    }
+}
+
+private val FILTER_PAYLOAD_TYPES = listOf(
+    PayloadType.REQ, PayloadType.RESPONSE, PayloadType.TXT_MSG, PayloadType.ACK, PayloadType.ADVERT,
+    PayloadType.GRP_TXT, PayloadType.GRP_DATA, PayloadType.ANON_REQ, PayloadType.PATH, PayloadType.TRACE,
+    PayloadType.MULTIPART, PayloadType.CONTROL, PayloadType.RAW_CUSTOM,
+)
+
+private val FILTER_NODE_TYPES = listOf(
+    ContactType.CHAT to "Contact", ContactType.REPEATER to "Repeater",
+    ContactType.ROOM to "Room", ContactType.SENSOR to "Sensor",
+)
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun PacketSearchField(query: String, onQueryChange: (String) -> Unit, modifier: Modifier = Modifier) {
-    OutlinedTextField(
-        value = query, onValueChange = onQueryChange,
-        modifier = modifier, singleLine = true,
-        textStyle = MaterialTheme.typography.bodyMedium,
-        placeholder = { Text("Filter by node, path, or type", style = MaterialTheme.typography.bodyMedium) },
-        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp)) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Default.Close, contentDescription = "Clear filter", modifier = Modifier.size(20.dp))
+private fun PacketFilterDialog(
+    initial: PacketFilter,
+    onApply: (PacketFilter) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var payloadTypes by remember { mutableStateOf(initial.payloadTypes) }
+    var nodeTypes by remember { mutableStateOf(initial.nodeTypes) }
+    var routes by remember { mutableStateOf(initial.routes) }
+    var withPositionOnly by remember { mutableStateOf(initial.withPositionOnly) }
+    // Numeric bounds are edited as text and parsed on Apply (blank/invalid = no bound).
+    var snrMin by remember { mutableStateOf(initial.snrMin?.let { fmtNum(it) } ?: "") }
+    var snrMax by remember { mutableStateOf(initial.snrMax?.let { fmtNum(it) } ?: "") }
+    var rssiMin by remember { mutableStateOf(initial.rssiMin?.toString() ?: "") }
+    var rssiMax by remember { mutableStateOf(initial.rssiMax?.toString() ?: "") }
+    var lenMin by remember { mutableStateOf(initial.lenMin?.toString() ?: "") }
+    var lenMax by remember { mutableStateOf(initial.lenMax?.toString() ?: "") }
+    var hopsMin by remember { mutableStateOf(initial.hopsMin?.toString() ?: "") }
+    var hopsMax by remember { mutableStateOf(initial.hopsMax?.toString() ?: "") }
+
+    fun build() = PacketFilter(
+        payloadTypes = payloadTypes, nodeTypes = nodeTypes, routes = routes,
+        snrMin = snrMin.toDoubleOrNull(), snrMax = snrMax.toDoubleOrNull(),
+        rssiMin = rssiMin.toIntOrNull(), rssiMax = rssiMax.toIntOrNull(),
+        lenMin = lenMin.toIntOrNull(), lenMax = lenMax.toIntOrNull(),
+        hopsMin = hopsMin.toIntOrNull(), hopsMax = hopsMax.toIntOrNull(),
+        withPositionOnly = withPositionOnly,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF2A2A2A), // dark gray filter card
+        confirmButton = { TextButton(onClick = { onApply(build()) }) { Text("Apply") } },
+        dismissButton = { TextButton(onClick = { onApply(PacketFilter()) }) { Text("Clear all") } },
+        title = { Text("Filters") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 460.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                FilterSection("Packet type") {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FILTER_PAYLOAD_TYPES.forEach { t ->
+                            FilterChip(
+                                selected = t in payloadTypes,
+                                onClick = { payloadTypes = payloadTypes.toggle(t) },
+                                label = { Text(PayloadType.name(t)) },
+                            )
+                        }
+                    }
+                }
+                FilterSection("Node type", "Matches ADVERT packets only.") {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FILTER_NODE_TYPES.forEach { (t, label) ->
+                            FilterChip(
+                                selected = t in nodeTypes,
+                                onClick = { nodeTypes = nodeTypes.toggle(t) },
+                                label = { Text(label) },
+                            )
+                        }
+                    }
+                }
+                FilterSection("Route") {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("flood" to "Flood", "direct" to "Direct").forEach { (v, label) ->
+                            FilterChip(
+                                selected = v in routes,
+                                onClick = { routes = routes.toggle(v) },
+                                label = { Text(label) },
+                            )
+                        }
+                    }
+                }
+                FilterSection("SNR (dB)") { RangeFields(snrMin, { snrMin = it }, snrMax, { snrMax = it }) }
+                FilterSection("RSSI (dBm)") { RangeFields(rssiMin, { rssiMin = it }, rssiMax, { rssiMax = it }) }
+                FilterSection("Length (bytes)") { RangeFields(lenMin, { lenMin = it }, lenMax, { lenMax = it }) }
+                FilterSection("Hops") { RangeFields(hopsMin, { hopsMin = it }, hopsMax, { hopsMax = it }) }
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Checkbox(checked = withPositionOnly, onCheckedChange = { withPositionOnly = it })
+                    Text("Only packets with a GPS position", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         },
     )
+}
+
+private fun <T> Set<T>.toggle(v: T): Set<T> = if (v in this) this - v else this + v
+
+private fun fmtNum(d: Double): String = if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
+
+@Composable
+private fun FilterSection(title: String, hint: String? = null, content: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        hint?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        }
+        content()
+    }
+}
+
+@Composable
+private fun RangeFields(min: String, onMin: (String) -> Unit, max: String, onMax: (String) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = min, onValueChange = onMin, label = { Text("min") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedTextField(
+            value = max, onValueChange = onMax, label = { Text("max") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.weight(1f),
+        )
+    }
 }
 
 private fun payloadColor(type: Int): Color = when (type) {

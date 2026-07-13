@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlin.random.Random
 import kotlinx.coroutines.launch
+import org.thepacket.meshcore.ble.LinkState
 import org.thepacket.meshcore.ble.MeshCoreLink
 import org.thepacket.meshcore.protocol.AdvertPathInfo
 import org.thepacket.meshcore.protocol.AutoAddConfig
@@ -100,11 +101,14 @@ class MeshSession(
 ) {
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
-        const val MAX_PACKETS = 200 // cap the live packet feed
+        const val MAX_PACKETS = 5000 // cap the live packet feed (newest kept, earliest dropped)
         const val MAX_PACKET_HISTORY = 2000 // cap the persisted analytics history
         const val NOISE_HISTORY = 120 // noise-floor samples retained for the graph
         const val TAG = "MeshSession"
     }
+
+    /** BLE companion link state — exposed so the UI can gate device-dependent actions. */
+    val linkState: StateFlow<LinkState> get() = link.state
 
     private val _self = MutableStateFlow<SelfInfo?>(null)
     val self: StateFlow<SelfInfo?> = _self.asStateFlow()

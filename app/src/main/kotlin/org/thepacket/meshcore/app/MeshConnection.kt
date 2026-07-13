@@ -34,7 +34,7 @@ object MeshConnection {
     fun setMqttEnabled(context: Context, enabled: Boolean) {
         val prefs = MqttPrefs(context)
         prefs.enabled = enabled
-        if (enabled) mqtt.start(prefs.brokerUrl, prefs.topic, prefs.username, prefs.password) else mqtt.stop()
+        if (enabled) mqtt.start(prefs.brokerUrls, prefs.topic, prefs.username, prefs.password, prefs.broker) else mqtt.stop()
     }
 
     /** Idempotent — safe to call from both the Application and the ViewModel. */
@@ -46,7 +46,7 @@ object MeshConnection {
         link = NordicMeshCoreLink(app)
         session = MeshSession(link, scope, ChatStore(app), AdminPrefs(app), ContactStore(app), PacketStore(app))
         mqtt = MqttPacketSource(session::injectPacket)
-        MqttPrefs(app).let { if (it.enabled) mqtt.start(it.brokerUrl, it.topic, it.username, it.password) }
+        MqttPrefs(app).let { if (it.enabled) mqtt.start(it.brokerUrls, it.topic, it.username, it.password, it.broker) }
         initialized = true
     }
 }

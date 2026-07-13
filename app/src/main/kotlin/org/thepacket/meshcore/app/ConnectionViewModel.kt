@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.thepacket.meshcore.app.ui.PacketFilter
 import org.thepacket.meshcore.ble.LinkState
 import org.thepacket.meshcore.ble.ScannedDevice
 
@@ -39,6 +40,9 @@ data class UiState(
     val mapFocus: Pair<Double, Double>? = null,
     /** Observer mode: viewing the app (e.g. the MQTT feed) with no BLE device connected. */
     val observing: Boolean = false,
+    /** Packet monitor view state, hoisted so it persists across tab switches for the app's lifetime. */
+    val packetFilter: PacketFilter = PacketFilter(),
+    val packetGroupByHash: Boolean = false,
 )
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
@@ -164,6 +168,10 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeMapFocus() = _ui.update { it.copy(mapFocus = null) }
 
     fun setChatsTab(index: Int) = _ui.update { it.copy(chatsTab = index) }
+
+    // ---- packet monitor view state ----
+    fun setPacketFilter(filter: PacketFilter) = _ui.update { it.copy(packetFilter = filter) }
+    fun setPacketGroupByHash(on: Boolean) = _ui.update { it.copy(packetGroupByHash = on) }
 
     fun openConversation(id: String, title: String) {
         session.setActiveConversation(id)

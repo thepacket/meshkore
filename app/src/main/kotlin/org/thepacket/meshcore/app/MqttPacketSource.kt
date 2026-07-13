@@ -34,25 +34,44 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
 
     @Volatile private var client: Mqtt3AsyncClient? = null
 
-    fun start(url: String, topic: String, username: String = "", password: String = "") {
+    private data class Broker(val host: String, val port: Int, val path: String)
+
+    private var brokers: List<Broker> = emptyList()
+    private var activeIndex = 0
+    @Volatile private var failCount = 0
+
+    private fun parseBroker(url: String): Broker {
+        val uri = URI(url.trim())
+        val host = uri.host ?: error("no host in $url")
+        val port = if (uri.port > 0) uri.port else 443
+        val path = uri.path.trim('/').ifEmpty { "mqtt" }
+        return Broker(host, port, path)
+    }
+
+    /**
+     * Connect to [urls]\[startIndex]. On repeated network drops the source fails over to the next
+     * broker in [urls] (wrapping around), so a broker outage silently moves the feed to a healthy one.
+     */
+    fun start(urls: List<String>, topic: String, username: String = "", password: String = "", startIndex: Int = 0) {
         stop()
         _status.value = MqttStatus.Connecting
         try {
-            val uri = URI(url.trim())
-            val host = uri.host ?: error("no host in $url")
-            val port = if (uri.port > 0) uri.port else 443
-            val path = uri.path.trim('/').ifEmpty { "mqtt" }
-            Log.d(TAG, "connecting host=$host port=$port path=/$path topic=$topic auth=${username.isNotBlank()}")
+            brokers = urls.map(::parseBroker)
+            if (brokers.isEmpty()) error("no broker")
+            activeIndex = startIndex.coerceIn(brokers.indices)
+            failCount = 0
+            val b = brokers[activeIndex]
+            Log.d(TAG, "connecting host=${b.host} port=${b.port} path=/${b.path} topic=$topic auth=${username.isNotBlank()}")
 
             val c = MqttClient.builder()
                 .useMqttVersion3()
                 .identifier("meshkore-" + System.currentTimeMillis().toString(36))
-                .serverHost(host)
-                .serverPort(port)
-                .webSocketConfig().serverPath(path).applyWebSocketConfig()
+                .serverHost(b.host)
+                .serverPort(b.port)
+                .webSocketConfig().serverPath(b.path).applyWebSocketConfig()
                 .sslWithDefaultConfig()
                 .automaticReconnectWithDefaultConfig()
-                .addConnectedListener { onConnected(topic) }
+                .addConnectedListener { failCount = 0; onConnected(topic) }
                 .addDisconnectedListener { ctx ->
                     val msg = ctx.cause.message ?: "disconnected"
                     Log.w(TAG, "disconnected: $msg")
@@ -65,6 +84,19 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
                         _status.value = MqttStatus.Error("Not authorized — check username/token (it may have expired)")
                     } else {
                         _status.value = MqttStatus.Error(msg) // network blip: keep auto-reconnecting
+                        // After a few failed tries against this broker, point the next reconnect at the other one.
+                        if (brokers.size > 1 && ++failCount >= FAILOVER_AFTER) {
+                            failCount = 0
+                            activeIndex = (activeIndex + 1) % brokers.size
+                            val next = brokers[activeIndex]
+                            Log.w(TAG, "failing over to ${next.host}:${next.port}")
+                            // Reuse the current transport (TLS + WebSocket path), only moving host/port.
+                            val transport = ctx.clientConfig.transportConfig.extend()
+                                .serverHost(next.host)
+                                .serverPort(next.port)
+                                .build()
+                            ctx.reconnector.transportConfig(transport)
+                        }
                     }
                 }
                 .buildAsync()
@@ -128,5 +160,8 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
         RxLog(snrQ = snrQ, rssi = o.optInt("RSSI", 0), raw = raw)
     }.getOrNull()
 
-    private companion object { const val TAG = "MqttSource" }
+    private companion object {
+        const val TAG = "MqttSource"
+        const val FAILOVER_AFTER = 3 // consecutive network drops before switching brokers
+    }
 }
