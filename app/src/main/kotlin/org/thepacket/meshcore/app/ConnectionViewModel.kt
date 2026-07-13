@@ -42,7 +42,7 @@ data class UiState(
     val observing: Boolean = false,
     /** Packet monitor view state, hoisted so it persists across tab switches for the app's lifetime. */
     val packetFilter: PacketFilter = PacketFilter(),
-    val packetGroupByHash: Boolean = false,
+    val packetGroupByHash: Boolean = true,
 )
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {

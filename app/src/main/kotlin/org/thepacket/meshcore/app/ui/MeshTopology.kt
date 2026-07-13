@@ -57,7 +57,7 @@ import kotlin.math.sin
 
 enum class TopoKind { Self, Repeater, Room, Contact, Unknown }
 
-class TopoNode(val id: String, val label: String, val kind: TopoKind) {
+class TopoNode(val id: String, val label: String, val kind: TopoKind, val ambiguous: Boolean = false) {
     var depth: Int = 0
     var x: Float = 0f
     var y: Float = 0f
@@ -107,6 +107,14 @@ fun buildTopology(
         }
     }
 
+    // A routing byte is ambiguous when 2+ distinct known keys share it — the node then conflates them.
+    val keysByByte = HashMap<Int, MutableSet<String>>()
+    for (c in nameBook) {
+        val b = c.publicKey.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: continue
+        keysByByte.getOrPut(b) { mutableSetOf() }.add(c.keyPrefixHex)
+    }
+    fun ambiguous(b: Int) = (keysByByte[b]?.size ?: 0) > 1
+
     fun byteId(b: Int) = "b:%02x".format(b)
     // Label + kind for a byte: the aggregate address book (name/type), then an advert name, else hex.
     fun labelKind(b: Int): Pair<String, TopoKind> {
@@ -132,7 +140,7 @@ fun buildTopology(
     fun node(b: Int): String {
         if (selfByte != null && b == selfByte) return selfId
         val id = byteId(b)
-        nodes.getOrPut(id) { val (l, k) = labelKind(b); TopoNode(id, l, k) }
+        nodes.getOrPut(id) { val (l, k) = labelKind(b); TopoNode(id, l, k, ambiguous(b)) }
         return id
     }
     fun edge(x: String, y: String) { if (x != y) edges.add(TopoEdge(x, y)) }
@@ -287,9 +295,11 @@ fun MeshTopologyScreen(
             }
         }
         Text(
-            "Routing graph centred on this node, from learned contact paths + observed packet " +
-                "relays (updates as packets arrive). ${topo.nodes.size} nodes · ${topo.maxDepth} hops · " +
-                "${topo.directCount} direct contacts collapsed. Pinch to zoom, drag to pan.",
+            "Routing graph centred on this node. A link means two nodes were adjacent hops on a " +
+                "known route — learned contact paths and observed packet relays — not a live radio " +
+                "link or signal strength (updates as packets arrive). ${topo.nodes.size} nodes · " +
+                "${topo.maxDepth} hops · ${topo.directCount} direct contacts collapsed. " +
+                "Pinch to zoom, drag to pan.",
             style = MaterialTheme.typography.bodySmall,
             color = cs.onSurface.copy(alpha = 0.6f),
         )
@@ -309,6 +319,10 @@ fun MeshTopologyScreen(
             val conns = topo.edges.count { it.a == n.id || it.b == n.id }
             Text("Focused: ${n.label} · $conns connection(s). Tap it again or empty space to clear.",
                 style = MaterialTheme.typography.labelMedium, color = cs.primary)
+            if (n.ambiguous) {
+                Text("⚠ This is a 1-byte routing ID shared by 2+ known nodes — its links may conflate them.",
+                    style = MaterialTheme.typography.labelSmall, color = cs.error)
+            }
         }
 
         // Neighbours of the focused node (itself + everything one edge away).

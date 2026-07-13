@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -118,12 +117,9 @@ fun PacketMonitorContent(
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Toggle button: filled when grouping is on, outlined when off.
-                if (groupByHash) {
-                    Button(onClick = { onGroupByHashChange(false) }) { Text("Group by hash") }
-                } else {
-                    OutlinedButton(onClick = { onGroupByHashChange(true) }) { Text("Group by hash") }
-                }
+                Checkbox(checked = groupByHash, onCheckedChange = onGroupByHashChange)
+                Text("Group by hash", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.weight(1f))
                 OutlinedButton(onClick = { showFilters = true }) {
                     Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp),
                         tint = if (filter.isActive) MaterialTheme.colorScheme.primary
@@ -649,7 +645,7 @@ private fun PacketFilterDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF2A2A2A), // dark gray filter card
+        containerColor = Color(0xFF141414), // dark gray filter card
         confirmButton = { TextButton(onClick = { onApply(build()) }) { Text("Apply") } },
         dismissButton = { TextButton(onClick = { onApply(PacketFilter()) }) { Text("Clear all") } },
         title = { Text("Filters") },
