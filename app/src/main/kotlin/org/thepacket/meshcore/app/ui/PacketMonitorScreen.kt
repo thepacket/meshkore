@@ -29,6 +29,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -643,6 +644,12 @@ private fun PacketFilterDialog(
         withPositionOnly = withPositionOnly,
     )
 
+    // Selected chips: cyan label, background unchanged (same transparent container as unselected).
+    val chipColors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = Color.Transparent,
+        selectedLabelColor = Color(0xFF22D3EE),
+    )
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF141414), // dark gray filter card
@@ -661,6 +668,11 @@ private fun PacketFilterDialog(
                                 selected = t in payloadTypes,
                                 onClick = { payloadTypes = payloadTypes.toggle(t) },
                                 label = { Text(PayloadType.name(t)) },
+                                colors = chipColors,
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true, selected = t in payloadTypes,
+                                    selectedBorderColor = MaterialTheme.colorScheme.outline,
+                                ),
                             )
                         }
                     }
@@ -672,6 +684,11 @@ private fun PacketFilterDialog(
                                 selected = t in nodeTypes,
                                 onClick = { nodeTypes = nodeTypes.toggle(t) },
                                 label = { Text(label) },
+                                colors = chipColors,
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true, selected = t in nodeTypes,
+                                    selectedBorderColor = MaterialTheme.colorScheme.outline,
+                                ),
                             )
                         }
                     }
@@ -683,6 +700,11 @@ private fun PacketFilterDialog(
                                 selected = v in routes,
                                 onClick = { routes = routes.toggle(v) },
                                 label = { Text(label) },
+                                colors = chipColors,
+                                border = FilterChipDefaults.filterChipBorder(
+                                    enabled = true, selected = v in routes,
+                                    selectedBorderColor = MaterialTheme.colorScheme.outline,
+                                ),
                             )
                         }
                     }
