@@ -3,6 +3,8 @@ package org.thepacket.meshcore.app
 import android.util.Log
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.datatypes.MqttQos
+import com.hivemq.client.mqtt.lifecycle.MqttClientDisconnectedContext
+import com.hivemq.client.mqtt.lifecycle.MqttDisconnectSource
 import com.hivemq.client.mqtt.mqtt3.Mqtt3AsyncClient
 import com.hivemq.client.mqtt.mqtt3.message.subscribe.suback.Mqtt3SubAck
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,6 +14,7 @@ import org.json.JSONObject
 import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.hexToBytes
 import java.net.URI
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 sealed interface MqttStatus {
@@ -37,8 +40,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     private data class Broker(val host: String, val port: Int, val path: String)
 
     private var brokers: List<Broker> = emptyList()
-    private var activeIndex = 0
-    @Volatile private var failCount = 0
+    @Volatile private var activeIndex = 0
 
     private fun parseBroker(url: String): Broker {
         val uri = URI(url.trim())
@@ -49,8 +51,9 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     }
 
     /**
-     * Connect to [urls]\[startIndex]. On repeated network drops the source fails over to the next
-     * broker in [urls] (wrapping around), so a broker outage silently moves the feed to a healthy one.
+     * Connect to [urls]\[startIndex]. Reconnection is driven by us (not HiveMQ's automatic reconnect,
+     * which can't be steered to a different host): on every network drop we reconnect against the
+     * *next* broker in [urls], so a broker going down moves the feed to the other one.
      */
     fun start(urls: List<String>, topic: String, username: String = "", password: String = "", startIndex: Int = 0) {
         stop()
@@ -59,7 +62,6 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
             brokers = urls.map(::parseBroker)
             if (brokers.isEmpty()) error("no broker")
             activeIndex = startIndex.coerceIn(brokers.indices)
-            failCount = 0
             val b = brokers[activeIndex]
             Log.d(TAG, "connecting host=${b.host} port=${b.port} path=/${b.path} topic=$topic auth=${username.isNotBlank()}")
 
@@ -70,35 +72,8 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
                 .serverPort(b.port)
                 .webSocketConfig().serverPath(b.path).applyWebSocketConfig()
                 .sslWithDefaultConfig()
-                .automaticReconnectWithDefaultConfig()
-                .addConnectedListener { failCount = 0; onConnected(topic) }
-                .addDisconnectedListener { ctx ->
-                    val msg = ctx.cause.message ?: "disconnected"
-                    Log.w(TAG, "disconnected: $msg")
-                    if (msg.contains("NOT_AUTHORIZED", ignoreCase = true) ||
-                        msg.contains("not authorized", ignoreCase = true) ||
-                        msg.contains("BAD_USER_NAME", ignoreCase = true)
-                    ) {
-                        // Bad/expired credentials won't fix themselves — stop retrying, surface clearly.
-                        ctx.reconnector.reconnect(false)
-                        _status.value = MqttStatus.Error("Not authorized — check username/token (it may have expired)")
-                    } else {
-                        _status.value = MqttStatus.Error(msg) // network blip: keep auto-reconnecting
-                        // After a few failed tries against this broker, point the next reconnect at the other one.
-                        if (brokers.size > 1 && ++failCount >= FAILOVER_AFTER) {
-                            failCount = 0
-                            activeIndex = (activeIndex + 1) % brokers.size
-                            val next = brokers[activeIndex]
-                            Log.w(TAG, "failing over to ${next.host}:${next.port}")
-                            // Reuse the current transport (TLS + WebSocket path), only moving host/port.
-                            val transport = ctx.clientConfig.transportConfig.extend()
-                                .serverHost(next.host)
-                                .serverPort(next.port)
-                                .build()
-                            ctx.reconnector.transportConfig(transport)
-                        }
-                    }
-                }
+                .addConnectedListener { onConnected(topic) }
+                .addDisconnectedListener { ctx -> onDisconnected(ctx) }
                 .buildAsync()
             client = c
             val connect = c.connectWith().cleanSession(true)
@@ -117,6 +92,36 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
         } catch (e: Exception) {
             Log.w(TAG, "start error", e)
             _status.value = MqttStatus.Error(e.message ?: "error")
+        }
+    }
+
+    private fun onDisconnected(ctx: MqttClientDisconnectedContext) {
+        // We disconnected on purpose (stop()) — stay down, don't reconnect.
+        if (ctx.source == MqttDisconnectSource.USER) return
+        val msg = ctx.cause.message ?: "disconnected"
+        Log.w(TAG, "disconnected (${ctx.source}): $msg")
+        if (msg.contains("NOT_AUTHORIZED", ignoreCase = true) ||
+            msg.contains("not authorized", ignoreCase = true) ||
+            msg.contains("BAD_USER_NAME", ignoreCase = true)
+        ) {
+            // Bad/expired credentials won't fix themselves — stop retrying, surface clearly.
+            ctx.reconnector.reconnect(false)
+            _status.value = MqttStatus.Error("Not authorized — check username/token (it may have expired)")
+            return
+        }
+        _status.value = MqttStatus.Error(msg)
+        // Reconnect after a short delay; when we have more than one broker, move to the next one so a
+        // broker outage carries the feed to a healthy server instead of retrying the dead one forever.
+        val recon = ctx.reconnector.reconnect(true).delay(RECONNECT_DELAY_MS, TimeUnit.MILLISECONDS)
+        if (brokers.size > 1) {
+            activeIndex = (activeIndex + 1) % brokers.size
+            val next = brokers[activeIndex]
+            Log.w(TAG, "failing over to ${next.host}:${next.port}")
+            // Reuse the current transport (TLS + WebSocket path), only moving host/port.
+            recon.transportConfig(
+                ctx.clientConfig.transportConfig.extend()
+                    .serverHost(next.host).serverPort(next.port).build()
+            )
         }
     }
 
@@ -162,6 +167,6 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
 
     private companion object {
         const val TAG = "MqttSource"
-        const val FAILOVER_AFTER = 3 // consecutive network drops before switching brokers
+        const val RECONNECT_DELAY_MS = 3000L // wait before each reconnect/failover attempt
     }
 }

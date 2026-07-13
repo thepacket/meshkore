@@ -152,8 +152,8 @@ private fun SignalDot(snrDb: Double?) {
     }
 }
 
-internal fun ageLabel(ms: Long): String {
-    val secs = ((System.currentTimeMillis() - ms) / 1000).coerceAtLeast(0)
+internal fun ageLabel(ms: Long, now: Long = System.currentTimeMillis()): String {
+    val secs = ((now - ms) / 1000).coerceAtLeast(0)
     return when {
         secs < 60 -> "${secs}s ago"
         secs < 3600 -> "${secs / 60}m ago"

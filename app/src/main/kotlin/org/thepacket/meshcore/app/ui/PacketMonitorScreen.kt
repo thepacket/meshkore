@@ -39,6 +39,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.MeshSession
@@ -88,6 +90,10 @@ fun PacketMonitorContent(
     var showFilters by remember { mutableStateOf(false) }
     // Which hash-groups are expanded (default collapsed). Keyed by payload fingerprint.
     val expandedGroups = remember { mutableStateMapOf<Long, Boolean>() }
+    // Ticks every second so each visible row's relative "… ago" age stays current. Only rows the
+    // LazyColumn actually composes read it, so off-screen rows aren't recomputed.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val channels by session.channels.collectAsStateWithLifecycle()
     val messages by session.messages.collectAsStateWithLifecycle()
@@ -147,12 +153,12 @@ fun PacketMonitorContent(
                 if (groupByHash) {
                     items(groups, key = { it.hash }) { g ->
                         if (g.members.size == 1) {
-                            PacketRow(g.rep, contacts, self) { detail = g.rep }
+                            PacketRow(g.rep, contacts, self, now) { detail = g.rep }
                         } else {
                             val expanded = expandedGroups[g.hash] == true
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 PacketRow(
-                                    g.rep, contacts, self,
+                                    g.rep, contacts, self, now,
                                     badge = "×${g.members.size}",
                                     expanded = expanded,
                                     onToggle = { expandedGroups[g.hash] = !expanded },
@@ -160,7 +166,7 @@ fun PacketMonitorContent(
                                 if (expanded) {
                                     g.members.filter { it !== g.rep }.forEach { m ->
                                         Box(Modifier.padding(start = 16.dp)) {
-                                            PacketRow(m, contacts, self) { detail = m }
+                                            PacketRow(m, contacts, self, now) { detail = m }
                                         }
                                     }
                                 }
@@ -169,7 +175,7 @@ fun PacketMonitorContent(
                     }
                 } else {
                     items(filtered, key = { System.identityHashCode(it) }) { p ->
-                        PacketRow(p, contacts, self) { detail = p }
+                        PacketRow(p, contacts, self, now) { detail = p }
                     }
                 }
             }
@@ -452,6 +458,7 @@ private fun PacketRow(
     p: RxLog,
     contacts: List<Contact>,
     self: SelfInfo?,
+    now: Long,                       // ticks each second so the relative age re-renders
     badge: String? = null,           // e.g. "×3" — a hash-group summary count
     expanded: Boolean = false,
     onToggle: (() -> Unit)? = null,  // non-null => show an expand/collapse chevron
@@ -499,7 +506,7 @@ private fun PacketRow(
             Text(clockTime(p.receivedAtMs), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 fontFamily = FontFamily.Monospace)
-            Text(ageLabel(p.receivedAtMs), style = MaterialTheme.typography.labelSmall,
+            Text(ageLabel(p.receivedAtMs, now), style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             if (distanceKm != null) {
                 Text(fmtDistance(distanceKm), style = MaterialTheme.typography.labelMedium,
