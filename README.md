@@ -41,17 +41,22 @@ Seven tabs — **Chats · Heard · Packets · Stats · Map · Tools · Settings*
 details, show on map, and get path to node. Fed by the device's own advert pushes **and by adverts
 observed over MQTT**.
 
-**Packet monitor** — live decoded RX feed with a filter box; deep decode: channel **decrypt**,
-**ACK match** to your own sends, trace per-hop SNRs, advert **clock skew** + distance, **link margin**,
-airtime estimate, and flood-rebroadcast count. Packets arrive from the connected device and/or the
-**MQTT** feed.
+**Packet monitor** — live decoded RX feed with a **Filters card** (by packet type, node type, route,
+and SNR / RSSI / length / hop-count ranges, or GPS-only) and **group-by-hash** collapsing of flood
+rebroadcasts into one expandable row (earliest kept). Deep decode: channel **decrypt**, **ACK match**
+to your own sends, trace per-hop SNRs, advert **clock skew** + distance, **link margin**, airtime
+estimate, and flood-rebroadcast count. Relative ages tick live; names resolve from the aggregate
+address book. Packets arrive from the connected device and/or the **MQTT** feed.
 
-**Statistics** — rolling noise-floor graph; radio / device / packet counters; a **Contacts & channels**
-card (address-book size, device contacts and channels vs. capacity); **My Telemetry**; and a
-**Traffic** analysis card over a persisted, cross-session packet history (5m / 1h / all windows):
-capture rate, estimated **channel-busy** (airtime ÷ window), flood/direct split, duplicate
-(flood-rebroadcast) share, a **packets-over-time** chart, payload-type mix, and **top talkers**
-(busiest sources by packets + airtime, name-resolved); with a one-tap **clear** to reset the history.
+**Statistics** — a **Contacts & channels** card (address-book size, device contacts and channels vs.
+capacity); an **MQTT** card (per-broker packet counts, total, disconnections, broker failovers); radio
+and device counters; **My Telemetry**; and a rolling **noise-floor** graph. A **Traffic** analysis card
+over a persisted, cross-session packet history (5m / 1h / all windows): capture rate, estimated
+**channel-busy** (airtime ÷ window), flood/direct split, duplicate (flood-rebroadcast) share, a
+**packets-over-time** chart, payload-type mix, and **top talkers** (busiest sources by packets +
+airtime, name-resolved); with a one-tap **clear** to reset the history. Signal & path **distribution**
+histograms over that history — **SNR**, **RSSI**, and **hop count** — plus a **Top Repeaters** ranking
+(nodes appearing most in packet paths).
 
 **Map** — OpenStreetMap plot of positioned nodes drawn from the full address book: typed markers,
 screen-space clustering, labels, and a tap-for-details sheet. Read-only — never reads the phone's GPS
@@ -65,7 +70,11 @@ on its own.
 - **Raw data** — send a raw custom-payload packet (text/hex) to a contact, and view received raw frames.
 - **Mesh topology** — an interactive routing graph centred on this node, built from learned contact
   paths + observed packet relays (updates live). Pinch-zoom / pan, tap a node to focus it and its
-  neighbours, and **export the graph as SVG**.
+  neighbours, and **export the graph as SVG**. A link is a *known route* (not a live radio link);
+  nodes whose 1-byte routing ID is shared by 2+ known nodes are flagged as ambiguous.
+
+Tools that drive the connected companion are **disabled and greyed** when no BLE device is connected;
+Mesh topology stays available (it works from stored/observed data).
 
 **Settings** — full editable device config: node name, region presets, frequency / bandwidth / SF /
 coding rate, TX power, client-repeat (with allowed-frequency guard), advertised position (typed, picked
@@ -75,7 +84,8 @@ clock** (drift vs. the phone + one-tap sync); plus **identity backup** (export /
 private key), device info, config/app-data export & import, debug logs, reboot, and factory reset.
 Also here: **live packets over MQTT** — optionally subscribe to the **meshcore.ca** feed (broker +
 region picker, token auth) to inject observed packets into the packet monitor, Heard list, traffic
-stats, and topology, with or without a BLE connection.
+stats, and topology, with or without a BLE connection. On connection loss the feed **fails over to the
+other broker** automatically.
 
 Runtime permissions: Bluetooth (and, on Android ≤ 11, location for BLE scanning); **location** — only
 when you tap "Use current location" to set this node's position; and **camera**, only when scanning a QR.
