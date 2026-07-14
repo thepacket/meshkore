@@ -983,13 +983,14 @@ class MeshSession(
      * device already has (matched by public key). New contacts are added with their path reset
      * so the device re-learns routing. Emits the count sent on [contactPushResult] when done.
      */
-    fun pushAllContactsToDevice() {
+    fun pushAllContactsToDevice(homeRegion: String) {
         val onDevice = _contacts.value
-        // Only push the contact types the user selected — the book holds every observed node, but a
-        // companion only wants the chosen kinds (chat by default).
-        val toPush = _allContacts.value.filter { it.type in _pushTypes.value }.filterNot { c ->
-            onDevice.any { it.publicKey.contentEquals(c.publicKey) }
-        }
+        // The book holds every observed node across regions, but a companion can only use nodes in its
+        // own region — so push only the user-selected types AND contacts in [homeRegion] (region-less
+        // contacts default to home). This keeps cross-region nodes off the device.
+        val toPush = _allContacts.value.filter {
+            it.type in _pushTypes.value && (it.region ?: homeRegion) == homeRegion
+        }.filterNot { c -> onDevice.any { it.publicKey.contentEquals(c.publicKey) } }
         scope.launch {
             var sent = 0
             for (c in toPush) {
@@ -1024,6 +1025,45 @@ class MeshSession(
     fun removeContact(c: Contact) {
         _contacts.update { list -> list.filterNot { it.publicKey.contentEquals(c.publicKey) } }
         scope.launch { runCatching { link.send(Requests.removeContact(c.publicKey)) } }
+    }
+
+    // ---- bulk contact export / import / clear ----------------------------------
+
+    /** The whole aggregate ("global") address book as JSON (full fields, incl. region). */
+    fun exportAggregateJson(): String = ContactStore.encode(_allContacts.value)
+
+    /** Merge a JSON contact list (from [exportAggregateJson]) into the aggregate book. Returns the count read. */
+    fun importAggregateJson(json: String): Int {
+        val list = ContactStore.decode(json)
+        mergeIntoAggregate(list)
+        return list.size
+    }
+
+    /** Wipe the aggregate address book (does not touch the connected device). */
+    fun clearAggregateContacts() {
+        _allContacts.value = emptyList()
+        contactStore?.save(emptyList())
+    }
+
+    /** The connected device's contacts as JSON (full fields). */
+    fun exportDeviceJson(): String = ContactStore.encode(_contacts.value)
+
+    /** Add a JSON contact list onto the connected device (path reset so it re-learns). Returns the count. */
+    fun importDeviceJson(json: String): Int {
+        val list = ContactStore.decode(json)
+        if (list.isEmpty()) return 0
+        val fresh = list.map { it.copy(outPathLen = 0xFF, outPath = ByteArray(64)) }
+        _contacts.update { cur -> (cur + fresh).distinctBy { it.publicKey.toHex() }.sortedByDescending { it.lastAdvert } }
+        mergeIntoAggregate(fresh)
+        scope.launch { for (c in fresh) { runCatching { link.send(Requests.addUpdateContact(c)) }; delay(60) } }
+        return list.size
+    }
+
+    /** Remove every contact from the connected device (and locally). */
+    fun clearDeviceContacts() {
+        val toRemove = _contacts.value
+        _contacts.value = emptyList()
+        scope.launch { for (c in toRemove) { runCatching { link.send(Requests.removeContact(c.publicKey)) }; delay(40) } }
     }
 
     /** Re-advertise a contact zero-hop so direct neighbours can discover it. */

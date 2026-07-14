@@ -21,37 +21,16 @@ class ContactStore(private val file: File) {
 
     fun load(): List<Contact> {
         if (!file.exists()) return emptyList()
-        return try {
-            val arr = JSONArray(file.readText())
-            buildList {
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    val key = o.getString("pubkey").hexToBytes()
-                    if (key.isEmpty()) continue
-                    add(
-                        Contact(
-                            publicKey = key,
-                            type = o.getInt("type"),
-                            flags = o.optInt("flags", 0),
-                            outPathLen = o.optInt("outPathLen", 0xFF),
-                            outPath = o.optString("outPath", "").hexToBytes().copyOf(64),
-                            name = o.optString("name", ""),
-                            lastAdvert = o.optLong("lastAdvert", 0),
-                            gpsLat = o.optInt("gpsLat", 0),
-                            gpsLon = o.optInt("gpsLon", 0),
-                            lastMod = o.optLong("lastMod", 0),
-                            region = o.optString("region", "").ifBlank { null },
-                        )
-                    )
-                }
-            }
-        } catch (_: Exception) {
-            emptyList() // corrupt/old file — start clean rather than crash
-        }
+        return runCatching { decode(file.readText()) }.getOrDefault(emptyList())
     }
 
     fun save(contacts: List<Contact>) {
-        try {
+        runCatching { file.writeText(encode(contacts)) } // best-effort; losing one save is non-fatal
+    }
+
+    companion object {
+        /** Serialize contacts (full fields, incl. region) as a JSON array — shared with export. */
+        fun encode(contacts: List<Contact>): String {
             val arr = JSONArray()
             contacts.forEach { c ->
                 arr.put(JSONObject().apply {
@@ -68,9 +47,34 @@ class ContactStore(private val file: File) {
                     c.region?.let { put("region", it) }
                 })
             }
-            file.writeText(arr.toString())
-        } catch (_: Exception) {
-            // best-effort; losing one save is non-fatal
+            return arr.toString(2)
+        }
+
+        /** Parse a JSON array produced by [encode]; skips malformed entries. */
+        fun decode(text: String): List<Contact> {
+            val arr = JSONArray(text)
+            return buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    val key = o.optString("pubkey", "").hexToBytes()
+                    if (key.isEmpty()) continue
+                    add(
+                        Contact(
+                            publicKey = key,
+                            type = o.optInt("type", 0),
+                            flags = o.optInt("flags", 0),
+                            outPathLen = o.optInt("outPathLen", 0xFF),
+                            outPath = o.optString("outPath", "").hexToBytes().copyOf(64),
+                            name = o.optString("name", ""),
+                            lastAdvert = o.optLong("lastAdvert", 0),
+                            gpsLat = o.optInt("gpsLat", 0),
+                            gpsLon = o.optInt("gpsLon", 0),
+                            lastMod = o.optLong("lastMod", 0),
+                            region = o.optString("region", "").ifBlank { null },
+                        )
+                    )
+                }
+            }
         }
     }
 }

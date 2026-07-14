@@ -21,12 +21,12 @@ class MqttPrefs(context: Context) {
     /** All broker URLs, in list order — the feed fails over across these starting from [broker]. */
     val brokerUrls: List<String> get() = BROKERS.map { it.second }
 
-    /** Selected region IATA code ("+" = all regions). */
+    /** Selected region IATA code. A previously-stored "+" (all regions, now removed) falls back to default. */
     var region: String
-        get() = prefs.getString(KEY_REGION, DEFAULT_REGION) ?: DEFAULT_REGION
+        get() = (prefs.getString(KEY_REGION, DEFAULT_REGION) ?: DEFAULT_REGION).let { if (it == "+") DEFAULT_REGION else it }
         set(v) { prefs.edit().putString(KEY_REGION, v.trim()).apply() }
 
-    /** MQTT topic derived from the region — every node's packets under it (or all regions). */
+    /** MQTT topic derived from the region — every node's packets under that region. */
     val topic: String get() = "meshcore/$region/+/packets"
 
     /** Username (blank for anonymous; the broker requires auth, so usually needed). */
@@ -48,9 +48,8 @@ class MqttPrefs(context: Context) {
             "Secondary" to "wss://mqtt2.meshcore.ca:443/mqtt",
         )
 
-        /** Selectable regions as (city, IATA); "+" = all regions (MQTT single-level wildcard). */
+        /** Selectable regions as (city, IATA). */
         val REGIONS: List<Pair<String, String>> = listOf(
-            "All regions" to "+",
             "Toronto" to "YYZ",
             "Vancouver" to "YVR",
             "Montréal" to "YUL",

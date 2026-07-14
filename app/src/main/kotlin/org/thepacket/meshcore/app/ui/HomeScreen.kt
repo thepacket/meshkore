@@ -72,6 +72,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.Conversation
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.app.PublicChannel
 import org.thepacket.meshcore.app.RegionChannels
 import org.thepacket.meshcore.protocol.Contact
@@ -162,9 +163,13 @@ private fun AllContactsList(
     // Keys already present on the connected device — so we can show what a push would add.
     val onDeviceKeys = remember(deviceContacts) { deviceContacts.map { it.publicKey.toHex() }.toSet() }
     val pushTypes by session.pushTypes.collectAsStateWithLifecycle()
-    // Only the user-selected contact types get pushed, so the count reflects those.
-    val missingCount = remember(allContacts, onDeviceKeys, pushTypes) {
-        allContacts.count { it.type in pushTypes && it.publicKey.toHex() !in onDeviceKeys }
+    // Home region = the MQTT-selected region; a companion can only use nodes in its own region.
+    val homeRegion = remember { MqttPrefs(ctx).region }
+    // Only the user-selected types in the home region get pushed, so the count reflects those.
+    val missingCount = remember(allContacts, onDeviceKeys, pushTypes, homeRegion) {
+        allContacts.count {
+            it.type in pushTypes && (it.region ?: homeRegion) == homeRegion && it.publicKey.toHex() !in onDeviceKeys
+        }
     }
 
     // Split the region-scoped address book by type once, so each filter tab shows a live count.
@@ -290,7 +295,7 @@ private fun AllContactsList(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { confirmSend = false; session.pushAllContactsToDevice() }) {
+                TextButton(onClick = { confirmSend = false; session.pushAllContactsToDevice(homeRegion) }) {
                     Text("Send")
                 }
             },

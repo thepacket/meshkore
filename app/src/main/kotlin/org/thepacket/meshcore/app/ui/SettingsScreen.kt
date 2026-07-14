@@ -140,10 +140,38 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         uri?.let { writeText(ctx, it, session.exportAppDataJson()); toast(ctx, "App data exported") }
     }
 
+    // ---- contact export / import launchers (global + device books) ----
+    val exportGlobalContacts = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let { writeText(ctx, it, session.exportAggregateJson()); toast(ctx, "Global contacts exported") }
+    }
+    val importGlobalContacts = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            val text = readText(ctx, it)
+            if (text != null) runCatching { session.importAggregateJson(text) }
+                .onSuccess { n -> toast(ctx, "Imported $n global contacts") }
+                .onFailure { toast(ctx, "Invalid contacts file") }
+            else toast(ctx, "Couldn't read file")
+        }
+    }
+    val exportDeviceContacts = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let { writeText(ctx, it, session.exportDeviceJson()); toast(ctx, "Device contacts exported") }
+    }
+    val importDeviceContacts = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            val text = readText(ctx, it)
+            if (text != null) runCatching { session.importDeviceJson(text) }
+                .onSuccess { n -> toast(ctx, "Sending $n contacts to device") }
+                .onFailure { toast(ctx, "Invalid contacts file") }
+            else toast(ctx, "Couldn't read file")
+        }
+    }
+
     var showReboot by remember { mutableStateOf(false) }
     var showFactory by remember { mutableStateOf(false) }
     var showPurge by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
+    var showClearGlobal by remember { mutableStateOf(false) }
+    var showClearDevice by remember { mutableStateOf(false) }
 
     if (self == null) {
         // No BLE device: device config isn't available, but the MQTT feed can still be configured
@@ -155,6 +183,7 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             Text("No device connected — connect one for full settings. The MQTT live-packet feed " +
                 "works without a device:", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall)
+            RegionCard(ctx)
             MqttCard(ctx)
         }
         return
@@ -164,6 +193,23 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // ---- Region (global: MQTT subscription + device push scope) ----
+        RegionCard(ctx)
+
+        // ---- Global Contacts (the aggregate address book) ----
+        SectionCard("Global Contacts") {
+            ToolButton("Export all") { exportGlobalContacts.launch("meshcore-global-contacts.json") }
+            ToolButton("Import all") { importGlobalContacts.launch(arrayOf("application/json")) }
+            ToolButton("Delete all", danger = true) { showClearGlobal = true }
+        }
+
+        // ---- Device contacts ----
+        SectionCard("Device contacts") {
+            ToolButton("Export all") { exportDeviceContacts.launch("meshcore-device-contacts.json") }
+            ToolButton("Import all") { importDeviceContacts.launch(arrayOf("application/json")) }
+            ToolButton("Delete all", danger = true) { showClearDevice = true }
+        }
+
         // ---- Identity ----
         var name by remember(self) { mutableStateOf(self.name) }
         SectionCard("Identity") {
@@ -527,6 +573,12 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
     ConfirmDialog(showPurge, "Purge local data",
         "Delete this app's chat history and cached data? The device is not affected.", "Purge", danger = true,
         onConfirm = { session.purgeLocalData(); toast(ctx, "Local data purged") }, onDismiss = { showPurge = false })
+    ConfirmDialog(showClearGlobal, "Delete all global contacts",
+        "Erase the entire aggregate address book? The connected device is not affected.", "Delete", danger = true,
+        onConfirm = { session.clearAggregateContacts(); toast(ctx, "Global contacts deleted") }, onDismiss = { showClearGlobal = false })
+    ConfirmDialog(showClearDevice, "Delete all device contacts",
+        "Remove every contact from the connected device? This can't be undone.", "Delete", danger = true,
+        onConfirm = { session.clearDeviceContacts(); toast(ctx, "Removing device contacts") }, onDismiss = { showClearDevice = false })
     if (showLogs) LogsDialog(
         logs = logs,
         onShare = {
@@ -614,20 +666,40 @@ private fun ImportPrivateKeyDialog(onDismiss: () -> Unit, onImport: (ByteArray) 
     )
 }
 
+/** Global mesh region — drives the meshcore.ca MQTT subscription topic and the device push scope. */
+@Composable
+private fun RegionCard(ctx: Context) {
+    val prefs = remember { MqttPrefs(ctx) }
+    var region by remember { mutableStateOf(prefs.region) }
+    val regions = MqttPrefs.REGIONS
+    SectionCard("Region") {
+        Text(
+            "Your mesh region. Sets the meshcore.ca MQTT subscription, and scopes which contacts are " +
+                "pushed to a connected device (a companion only wants nodes in its own region).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+        EnumDropdown("Region", regions.map { "${it.first} (${it.second})" },
+            regions.indexOfFirst { it.second == region }.coerceAtLeast(0)) { i ->
+            region = regions[i].second
+            prefs.region = region
+            if (prefs.enabled) MeshConnection.setMqttEnabled(ctx, true) // reconnect to the new topic
+        }
+    }
+}
+
 /** Configure + monitor the optional meshcore.ca MQTT live-packet subscription. */
 @Composable
 private fun MqttCard(ctx: Context) {
     val prefs = remember { MqttPrefs(ctx) }
     var enabled by remember { mutableStateOf(prefs.enabled) }
     var broker by remember { mutableIntStateOf(prefs.broker) }
-    var region by remember { mutableStateOf(prefs.region) }
     var user by remember { mutableStateOf(prefs.username) }
     var pass by remember { mutableStateOf(prefs.password) }
     val status by MeshConnection.mqtt.status.collectAsStateWithLifecycle()
     val received by MeshConnection.mqtt.received.collectAsStateWithLifecycle()
-    fun save() { prefs.broker = broker; prefs.region = region; prefs.username = user; prefs.password = pass }
+    fun save() { prefs.broker = broker; prefs.username = user; prefs.password = pass }
     val brokers = MqttPrefs.BROKERS
-    val regions = MqttPrefs.REGIONS
     SectionCard("MQTT — meshcore.ca live packets") {
         Text(
             "Subscribe to live packets from meshcore.ca and merge them into the packet monitor, " +
@@ -641,12 +713,6 @@ private fun MqttCard(ctx: Context) {
             broker = i
             prefs.broker = i
             if (enabled) MeshConnection.setMqttEnabled(ctx, true) // reconnect to the chosen broker
-        }
-        EnumDropdown("Region", regions.map { "${it.first} (${it.second})" },
-            regions.indexOfFirst { it.second == region }.coerceAtLeast(0)) { i ->
-            region = regions[i].second
-            prefs.region = region
-            if (enabled) MeshConnection.setMqttEnabled(ctx, true) // reconnect to the new topic
         }
         Field("Username", user) { user = it }
         OutlinedTextField(
