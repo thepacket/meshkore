@@ -180,12 +180,21 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("No device connected — connect one for full settings. The MQTT live-packet feed " +
-                "works without a device:", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            Text("No device connected — connect one for full settings. The region, MQTT feed, and " +
+                "global address book work without a device:", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall)
             RegionCard(ctx)
+            SectionCard("Global Contacts") {
+                ToolButton("Export all") { exportGlobalContacts.launch("meshcore-global-contacts.json") }
+                ToolButton("Import all") { importGlobalContacts.launch(arrayOf("application/json")) }
+                ToolButton("Delete all", danger = true) { showClearGlobal = true }
+            }
             MqttCard(ctx)
         }
+        ConfirmDialog(showClearGlobal, "Delete all global contacts",
+            "Erase the entire aggregate address book?", "Delete", danger = true,
+            onConfirm = { session.clearAggregateContacts(); toast(ctx, "Global contacts deleted") },
+            onDismiss = { showClearGlobal = false })
         return
     }
 
