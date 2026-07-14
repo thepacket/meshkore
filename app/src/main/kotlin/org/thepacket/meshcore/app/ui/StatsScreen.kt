@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -83,16 +82,10 @@ fun StatsContent(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         AddressBookCard(session)
-        MqttCard()
         TrafficCard(session)
-        SnrDistributionCard(session)
-        RssiDistributionCard(session)
-        HopCountDistributionCard(session)
-        TopRepeatersCard(session)
-        TopSendersCard(session)
+        MqttCard()
         radio?.let { RadioCard(it) }
         core?.let { CoreCard(it) }
-        TelemetryCard(telemetry, onRefreshTelemetry)
         NoiseCard(noiseHistory, radio?.noiseFloor)
         if (radio == null && core == null) {
             Text("Reading stats…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
@@ -126,7 +119,7 @@ private fun AddressBookCard(session: MeshSession) {
 
 /** Live MQTT feed counters: per-broker + total packets, disconnects, and broker failovers. */
 @Composable
-private fun MqttCard() {
+internal fun MqttCard() {
     val fromBroker by MeshConnection.mqtt.fromBroker.collectAsStateWithLifecycle()
     val total by MeshConnection.mqtt.received.collectAsStateWithLifecycle()
     val disconnections by MeshConnection.mqtt.disconnections.collectAsStateWithLifecycle()
@@ -152,12 +145,9 @@ private fun MqttCard() {
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun TrafficCard(session: MeshSession) {
+internal fun TrafficCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
-    // Resolve source names from the persisted aggregate book — it's populated even before a
-    // fresh contact sync completes, unlike the live device-contacts list.
-    val contacts by session.allContacts.collectAsStateWithLifecycle()
     val windows = remember { listOf("5m" to 5 * 60_000L, "1h" to 60 * 60_000L, "All" to Long.MAX_VALUE) }
     var wIdx by remember { mutableStateOf(0) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -221,75 +211,71 @@ private fun TrafficCard(session: MeshSession) {
             StatRow("Flood / direct", "$flood / $direct")
             val dups = count - pkts.distinctBy { it.hex }.size
             StatRow("Duplicate copies", "$dups (${dups * 100 / count}%)")
-
-            Text("Over time", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
-            TrafficSparkline(pkts, now, spanMs)
-
-            Text("By type", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
-            pkts.groupingBy { it.payloadType }.eachCount().entries
-                .sortedByDescending { it.value }
-                .forEach { (type, c) -> BarRow(PayloadType.name(type), c, count) }
-
-            // Top talkers: rank source identities by packet count (+ airtime) over the window.
-            // Source = advert pubkey (adverts) or the 1-byte src hash (other packets); nodes that
-            // share a hash are grouped and labelled by their contact name(s).
-            val talkers = remember(pkts, contacts, self) {
-                val agg = HashMap<Int, DoubleArray>() // hash -> [count, airtimeMs]
-                val advNames = HashMap<Int, String>() // best name seen in an advert for this hash
-                pkts.forEach { pkt ->
-                    val p = PacketInspector.parse(pkt.raw)
-                    val h = sourceByte(p) ?: return@forEach
-                    val a = agg.getOrPut(h) { DoubleArray(2) }
-                    a[0] += 1
-                    self?.let { s -> a[1] += LoRaAirtime.airtimeMs(pkt.length, s.bwKhz, s.radioSf, s.radioCr) ?: 0.0 }
-                    // Adverts carry the node's own name — the most reliable label for that source.
-                    p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { advNames.putIfAbsent(h, it) }
-                }
-                agg.entries.sortedByDescending { it.value[0] }.take(8)
-                    .map { e -> TalkerAgg(advNames[e.key] ?: talkerLabel(e.key, contacts), e.value[0].toInt(), e.value[1]) }
-            }
-            if (talkers.isNotEmpty()) {
-                Text("Top talkers", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 4.dp))
-                val maxCount = talkers.first().count
-                talkers.forEach { t -> TalkerRow(t.label, t.count, maxCount, t.airtimeMs) }
-            }
         }
     }
 }
 
 /**
- * Packets-over-time bar chart: bins the window into fixed slots and draws per-slot packet counts,
- * so bursts and quiet periods are visible. [spanMs] is the time from the oldest packet to [nowMs].
+ * Top nodes by packets sent (busiest sources), over the persisted RX history. Source = advert
+ * pubkey (adverts) or the 1-byte src hash; nodes sharing a hash are grouped and name-resolved.
  */
 @Composable
-private fun TrafficSparkline(pkts: List<RxLog>, nowMs: Long, spanMs: Long) {
-    val bars = 40
-    val counts = remember(pkts, nowMs) {
-        val c = IntArray(bars)
-        val oldest = nowMs - spanMs
-        pkts.forEach {
-            val f = ((it.receivedAtMs - oldest).toDouble() / spanMs).coerceIn(0.0, 1.0)
-            c[(f * (bars - 1)).toInt()]++
+internal fun TopTalkersCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val self by session.self.collectAsStateWithLifecycle()
+    val contacts by session.allContacts.collectAsStateWithLifecycle()
+    val talkers = remember(history, contacts, self) {
+        val agg = HashMap<Int, DoubleArray>() // hash -> [count, airtimeMs]
+        val advNames = HashMap<Int, String>() // best name seen in an advert for this hash
+        history.forEach { pkt ->
+            val p = PacketInspector.parse(pkt.raw)
+            val h = sourceByte(p) ?: return@forEach
+            val a = agg.getOrPut(h) { DoubleArray(2) }
+            a[0] += 1
+            self?.let { s -> a[1] += LoRaAirtime.airtimeMs(pkt.length, s.bwKhz, s.radioSf, s.radioCr) ?: 0.0 }
+            p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { advNames.putIfAbsent(h, it) }
         }
-        c
+        agg.entries.sortedByDescending { it.value[0] }.take(10)
+            .map { e -> TalkerAgg(advNames[e.key] ?: talkerLabel(e.key, contacts), e.value[0].toInt(), e.value[1]) }
     }
-    val maxC = (counts.maxOrNull() ?: 0).coerceAtLeast(1)
-    val barColor = MaterialTheme.colorScheme.primary
-    Canvas(Modifier.fillMaxWidth().height(72.dp)) {
-        val slot = size.width / bars
-        counts.forEachIndexed { i, c ->
-            val bh = size.height * (c.toFloat() / maxC)
-            drawRect(barColor, topLeft = Offset(i * slot, size.height - bh), size = Size(slot * 0.75f, bh))
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Top Talkers", style = MaterialTheme.typography.titleMedium)
+            Text("Busiest packet sources — count + airtime",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (talkers.isEmpty()) {
+                Text("No packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            val maxCount = talkers.first().count
+            talkers.forEach { t -> TalkerRow(t.label, t.count, maxCount, t.airtimeMs) }
         }
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text("${fmtDuration(spanMs / 1000)} ago", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        Text("peak $maxC/slot · now", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+}
+
+/** Distribution of packets by payload type over the whole persisted RX history. */
+@Composable
+internal fun MessageTypeCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Message Types", style = MaterialTheme.typography.titleMedium)
+            Text("Packets by payload type",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (history.isEmpty()) {
+                Text("No packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            val count = history.size
+            val byType = history.groupingBy { it.payloadType }.eachCount().entries
+                .sortedByDescending { it.value }
+            val max = byType.firstOrNull()?.value ?: 1
+            byType.forEach { (type, c) -> BarRow(PayloadType.name(type), c, count, max) }
+        }
     }
 }
 
@@ -331,14 +317,18 @@ private fun TalkerRow(label: String, count: Int, maxCount: Int, airtimeMs: Doubl
     }
 }
 
-/** A labelled proportional bar (value / total) for the traffic breakdown. */
+/**
+ * A labelled bar for the traffic breakdown. The label shows the share of [total]; the bar length is
+ * scaled to [max] (the largest value in the set) so the top row fills the width.
+ */
 @Composable
-private fun BarRow(label: String, value: Int, total: Int) {
-    val frac = if (total > 0) value.toFloat() / total else 0f
+private fun BarRow(label: String, value: Int, total: Int, max: Int = total) {
+    val frac = if (max > 0) value.toFloat() / max else 0f
+    val pct = if (total > 0) value * 100 / total else 0
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(label, style = MaterialTheme.typography.labelSmall)
-            Text("$value (${(frac * 100).toInt()}%)", style = MaterialTheme.typography.labelSmall,
+            Text("$value ($pct%)", style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace)
         }
         Box(
@@ -346,29 +336,6 @@ private fun BarRow(label: String, value: Int, total: Int) {
                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
         ) {
             Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
-        }
-    }
-}
-
-@Composable
-private fun TelemetryCard(telemetry: List<Lpp.Reading>, onRefresh: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("My telemetry", style = MaterialTheme.typography.titleMedium)
-                IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
-            }
-            if (telemetry.isEmpty()) {
-                Text("No telemetry.", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            } else {
-                telemetry.groupBy { it.channel }.toSortedMap().forEach { (ch, readings) ->
-                    Text("Channel $ch", style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary)
-                    readings.forEach { StatRow(telemetryLabel(it), telemetryValue(it)) }
-                }
-            }
         }
     }
 }
@@ -453,7 +420,7 @@ private fun NoiseGraph(history: List<Int>, modifier: Modifier) {
 
 /** SNR histogram over the RX history (higher = cleaner signal), green bars. */
 @Composable
-private fun SnrDistributionCard(session: MeshSession) {
+internal fun SnrDistributionCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val stats = remember(history) { distStats(history.map { it.snrDb }) }
     DistributionCard(
@@ -468,7 +435,7 @@ private fun SnrDistributionCard(session: MeshSession) {
 
 /** RSSI histogram over the RX history (closer to 0 = stronger), blue bars. */
 @Composable
-private fun RssiDistributionCard(session: MeshSession) {
+internal fun RssiDistributionCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val stats = remember(history) { distStats(history.map { it.rssi.toDouble() }) }
     DistributionCard(
@@ -484,7 +451,7 @@ private fun RssiDistributionCard(session: MeshSession) {
 /** Histogram of relay-hop counts per packet, with avg/median/max and a direct-packet count. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun HopCountDistributionCard(session: MeshSession) {
+internal fun HopCountDistributionCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val stats = remember(history) { hopStats(history) }
     Card(Modifier.fillMaxWidth()) {
@@ -552,7 +519,7 @@ private data class RepeaterAgg(val label: String, val count: Int)
  * Path hops are 1-byte routing identities, resolved to a name via an advert or the aggregate book.
  */
 @Composable
-private fun TopRepeatersCard(session: MeshSession) {
+internal fun TopRepeatersCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val contacts by session.allContacts.collectAsStateWithLifecycle()
     val top = remember(history, contacts) {
@@ -591,7 +558,7 @@ private fun TopRepeatersCard(session: MeshSession) {
  * parsed from the decrypted GRP_TXT payload ("Sender: text"); undecryptable posts count as Anonymous.
  */
 @Composable
-private fun TopSendersCard(session: MeshSession) {
+internal fun TopSendersCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val channels by session.channels.collectAsStateWithLifecycle()
     val top = remember(history, channels) {

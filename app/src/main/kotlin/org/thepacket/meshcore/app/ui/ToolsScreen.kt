@@ -16,11 +16,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataObject
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Route
@@ -101,6 +105,13 @@ fun ToolsContent(
             "discover" -> DiscoverTool(session, self, onShowOnMap) { open = null }
             "rawdata" -> RawDataTool(session, contacts, ::notify) { open = null }
             "topology" -> MeshTopologyScreen(session, onShowOnMap) { open = null }
+            "talkers" -> AnalyticsTool("Top Talkers", { open = null }) { TopTalkersCard(session) }
+            "msgtypes" -> AnalyticsTool("Message Types", { open = null }) { MessageTypeCard(session) }
+            "snr" -> AnalyticsTool("SNR Distribution", { open = null }) { SnrDistributionCard(session) }
+            "rssi" -> AnalyticsTool("RSSI Distribution", { open = null }) { RssiDistributionCard(session) }
+            "hops" -> AnalyticsTool("Hop Count", { open = null }) { HopCountDistributionCard(session) }
+            "repeaters" -> AnalyticsTool("Top Repeaters", { open = null }) { TopRepeatersCard(session) }
+            "senders" -> AnalyticsTool("Top Senders", { open = null }) { TopSendersCard(session) }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -133,10 +144,29 @@ fun ToolsContent(
                     "Send a raw custom-payload packet to a contact, and view received raw data.", enabled = connected) {
                     open = "rawdata"
                 }
+
+                // Analytics tools work from the recorded packet history (with or without a device).
+                Text("Analytics", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp, start = 4.dp))
                 ToolRow(Icons.Default.Hub, "Mesh topology",
                     "Visualise the routing graph — how this node reaches others through relays.") {
                     open = "topology"
                 }
+                ToolRow(Icons.Default.Person, "Top Talkers",
+                    "Busiest packet sources by count and airtime.") { open = "talkers" }
+                ToolRow(Icons.Default.DataObject, "Message Types",
+                    "Distribution of packets by payload type.") { open = "msgtypes" }
+                ToolRow(Icons.Default.BarChart, "SNR Distribution",
+                    "Signal-to-noise histogram across received packets.") { open = "snr" }
+                ToolRow(Icons.Default.SignalCellularAlt, "RSSI Distribution",
+                    "Received-signal-strength histogram across received packets.") { open = "rssi" }
+                ToolRow(Icons.Default.Timeline, "Hop Count",
+                    "Distribution of relay-hop counts per packet.") { open = "hops" }
+                ToolRow(Icons.Default.Hub, "Top Repeaters",
+                    "Nodes appearing most often in packet paths.") { open = "repeaters" }
+                ToolRow(Icons.Default.Forum, "Top Senders",
+                    "Channel messages ranked by sender.") { open = "senders" }
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp)) { data ->
@@ -327,6 +357,16 @@ private fun ToolHeader(title: String, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
         Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** A full-screen host for an analytics [card] (a Stats card), with a back header. */
+@Composable
+private fun AnalyticsTool(title: String, onBack: () -> Unit, card: @Composable () -> Unit) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        ToolHeader(title, onBack)
+        card()
     }
 }
 
