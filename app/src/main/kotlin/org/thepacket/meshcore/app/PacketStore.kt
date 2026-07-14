@@ -32,6 +32,7 @@ class PacketStore(private val file: File) {
                         rssi = o.optInt("rssi", 0),
                         raw = raw,
                         receivedAtMs = o.optLong("ts", 0),
+                        region = o.optString("rgn", "").ifBlank { null },
                     ))
                 }
             }
@@ -49,6 +50,7 @@ class PacketStore(private val file: File) {
                     put("rssi", p.rssi)
                     put("raw", p.raw.toHex())
                     put("ts", p.receivedAtMs)
+                    p.region?.let { put("rgn", it) }
                 })
             }
             file.writeText(arr.toString())

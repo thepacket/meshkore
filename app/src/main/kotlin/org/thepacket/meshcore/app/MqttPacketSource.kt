@@ -146,7 +146,9 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
             .topicFilter(topic)
             .qos(MqttQos.AT_MOST_ONCE)
             .callback { publish ->
-                val log = parse(String(publish.payloadAsBytes, Charsets.UTF_8)) ?: return@callback
+                // Topic is meshcore/<region>/<node>/packets — the region disambiguates 1-byte hop hashes.
+                val region = publish.topic.toString().split('/').getOrNull(1)?.takeIf { it.isNotBlank() && it != "+" }
+                val log = parse(String(publish.payloadAsBytes, Charsets.UTF_8), region) ?: return@callback
                 if (_received.value == 0L) Log.d(TAG, "first packet injected: ${log.raw.size}B")
                 onPacket(log)
                 _received.value++
@@ -173,14 +175,14 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
      * field; `SNR`/`RSSI` are numeric *strings* (often empty). Observer packet-events with no
      * bytes (`raw: ""`) are skipped. Returns null for status messages and anything without bytes.
      */
-    private fun parse(json: String): RxLog? = runCatching {
+    private fun parse(json: String, region: String?): RxLog? = runCatching {
         val o = JSONObject(json)
         val hex = o.optString("raw", "").filterNot { it.isWhitespace() }
         if (hex.length < 2 || hex.length % 2 != 0 || !hex.all { it in "0123456789abcdefABCDEF" }) return null
         val raw = hex.hexToBytes()
         // optDouble/optInt coerce numeric strings and fall back to 0 on empty — never throw.
         val snrQ = (o.optDouble("SNR", 0.0) * 4).roundToInt()
-        RxLog(snrQ = snrQ, rssi = o.optInt("RSSI", 0), raw = raw)
+        RxLog(snrQ = snrQ, rssi = o.optInt("RSSI", 0), raw = raw, region = region)
     }.getOrNull()
 
     private companion object {

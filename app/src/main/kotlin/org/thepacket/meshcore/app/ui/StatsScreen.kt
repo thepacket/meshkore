@@ -2,6 +2,7 @@ package org.thepacket.meshcore.app.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +52,7 @@ import org.thepacket.meshcore.app.MeshConnection
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.GroupCipher
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.LoRaAirtime
@@ -60,6 +64,10 @@ import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.RadioStats
 import org.thepacket.meshcore.protocol.RouteType
 import org.thepacket.meshcore.protocol.RxLog
+import org.thepacket.meshcore.protocol.toHex
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -225,18 +233,20 @@ internal fun TopTalkersCard(session: MeshSession) {
     val self by session.self.collectAsStateWithLifecycle()
     val contacts by session.allContacts.collectAsStateWithLifecycle()
     val talkers = remember(history, contacts, self) {
-        val agg = HashMap<Int, DoubleArray>() // hash -> [count, airtimeMs]
-        val advNames = HashMap<Int, String>() // best name seen in an advert for this hash
+        val resolver = NodeResolver(history, contacts)
+        val agg = HashMap<String, DoubleArray>() // node id -> [count, airtimeMs]
+        val info = HashMap<String, ResolvedNode>()
         history.forEach { pkt ->
             val p = PacketInspector.parse(pkt.raw)
-            val h = sourceByte(p) ?: return@forEach
-            val a = agg.getOrPut(h) { DoubleArray(2) }
+            val byte = sourceByte(p) ?: return@forEach
+            val rn = resolver.resolve(pkt.region, byte) // resolve the source within the packet's region
+            val a = agg.getOrPut(rn.id) { DoubleArray(2) }
             a[0] += 1
             self?.let { s -> a[1] += LoRaAirtime.airtimeMs(pkt.length, s.bwKhz, s.radioSf, s.radioCr) ?: 0.0 }
-            p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { advNames.putIfAbsent(h, it) }
+            info.putIfAbsent(rn.id, rn)
         }
         agg.entries.sortedByDescending { it.value[0] }.take(10)
-            .map { e -> TalkerAgg(advNames[e.key] ?: talkerLabel(e.key, contacts), e.value[0].toInt(), e.value[1]) }
+            .map { e -> TalkerAgg(info.getValue(e.key).label, e.value[0].toInt(), e.value[1]) }
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -284,18 +294,6 @@ private data class TalkerAgg(val label: String, val count: Int, val airtimeMs: D
 /** The 1-byte source identity of a packet: advert pubkey's first byte, else the src hash; null if none. */
 private fun sourceByte(p: ParsedPacket): Int? =
     p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: p.srcHash
-
-/** Resolve a 1-byte source hash to contact name(s), or "0xNN" when unknown. */
-private fun talkerLabel(hash: Int, contacts: List<Contact>): String {
-    val names = contacts
-        .filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hash }
-        .map { it.name.ifBlank { it.keyPrefixHex } }
-    return when {
-        names.isEmpty() -> "0x%02X".format(hash)
-        names.size == 1 -> names[0]
-        else -> "${names[0]} +${names.size - 1}"
-    }
-}
 
 /** A top-talker bar: proportional to packet count, with count + airtime on the right. */
 @Composable
@@ -448,6 +446,206 @@ internal fun RssiDistributionCard(session: MeshSession) {
     )
 }
 
+/** Scatter of every packet at (SNR, RSSI), over Weak/Good/Excellent link-quality zones. */
+@Composable
+internal fun SnrRssiScatterCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val points = remember(history) { history.map { it.snrDb.toFloat() to it.rssi.toFloat() } }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("SNR vs RSSI Scatter", style = MaterialTheme.typography.titleMedium)
+            Text("Each dot = one packet. Cluster position reveals link quality.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (points.isEmpty()) {
+                Text("No packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // RSSI (y) axis ticks, top → bottom.
+                Column(Modifier.height(220.dp).width(34.dp), verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.End) {
+                    listOf("-10", "-40", "-70", "-100", "-130").forEach {
+                        Text(it, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                }
+                ScatterCanvas(points, Modifier.weight(1f).height(220.dp).padding(start = 4.dp))
+            }
+            // SNR (x) axis ticks.
+            Row(Modifier.fillMaxWidth().padding(start = 42.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                listOf("-10", "-6", "-2", "2", "6", "10", "14").forEach {
+                    Text(it, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                LegendDot(Color(0xFFEF4444), "Weak"); Box(Modifier.width(12.dp))
+                LegendDot(Color(0xFF22C55E), "Excellent")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScatterCanvas(points: List<Pair<Float, Float>>, modifier: Modifier) {
+    val dot = Color(0xFF60A5FA)
+    Canvas(modifier) {
+        val snrLo = -12f; val snrHi = 15f; val rssiLo = -130f; val rssiHi = -10f
+        fun x(s: Float) = (s.coerceIn(snrLo, snrHi) - snrLo) / (snrHi - snrLo) * size.width
+        fun y(r: Float) = (rssiHi - r.coerceIn(rssiLo, rssiHi)) / (rssiHi - rssiLo) * size.height
+        fun zone(color: Color, x0: Float, x1: Float, rTop: Float, rBot: Float) =
+            drawRect(color.copy(alpha = 0.12f), topLeft = Offset(x(x0), y(rTop)),
+                size = Size(x(x1) - x(x0), y(rBot) - y(rTop)))
+        zone(Color(0xFFEF4444), snrLo, 0f, -100f, rssiLo) // Weak
+        zone(Color(0xFF22C55E), 6f, snrHi, rssiHi, -80f)  // Excellent
+        points.forEach { (s, r) -> drawCircle(dot.copy(alpha = 0.55f), radius = 3f, center = Offset(x(s), y(r))) }
+    }
+}
+
+/** Avg SNR (line) and packet volume (area) over the RX history's time span. */
+@Composable
+internal fun SignalQualityCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val series = remember(history) { signalOverTime(history, bins = 72) }
+    val snrColor = MaterialTheme.colorScheme.secondary
+    val volColor = Color(0xFF64748B)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Signal Quality Over Time", style = MaterialTheme.typography.titleMedium)
+            Text("SNR trend and packet volume",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (series == null) {
+                Text("No packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            SignalQualityChart(series, snrColor, volColor, Modifier.fillMaxWidth().height(180.dp))
+            // Time axis: hour-of-day at five points from oldest to newest.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                for (i in 0..4) {
+                    val t = series.startMs + (series.endMs - series.startMs) * i / 4
+                    Text(hourLabel(t), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically) {
+                LegendDot(snrColor, "Avg SNR")
+                Box(Modifier.width(16.dp))
+                LegendDot(volColor, "Volume")
+            }
+        }
+    }
+}
+
+@Composable
+private fun LegendDot(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).background(color))
+        Text(label, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/** Green avg-SNR line in the upper band, navy volume area in the lower band. */
+@Composable
+private fun SignalQualityChart(s: SignalSeries, snrColor: Color, volColor: Color, modifier: Modifier) {
+    Canvas(modifier) {
+        val n = s.counts.size
+        if (n < 2) return@Canvas
+        val dx = size.width / (n - 1)
+        // Volume area: baseline at bottom, rising into the lower ~45% of the height.
+        val maxVol = (s.counts.maxOrNull() ?: 0).coerceAtLeast(1)
+        val volTop = size.height * 0.55f
+        val volPath = Path().apply {
+            moveTo(0f, size.height)
+            s.counts.forEachIndexed { i, c ->
+                lineTo(i * dx, size.height - (size.height - volTop) * (c.toFloat() / maxVol))
+            }
+            lineTo(size.width, size.height)
+            close()
+        }
+        drawPath(volPath, volColor.copy(alpha = 0.45f))
+        // Avg-SNR line across present bins (bridging empty ones), mapped into the top band.
+        val top = size.height * 0.08f; val bot = size.height * 0.55f
+        val range = (s.snrMax - s.snrMin).coerceAtLeast(0.1)
+        val line = Path()
+        var started = false
+        s.avgSnr.forEachIndexed { i, v ->
+            if (v == null) return@forEachIndexed
+            val py = bot - ((v - s.snrMin) / range * (bot - top)).toFloat()
+            val px = i * dx
+            if (!started) { line.moveTo(px, py); started = true } else line.lineTo(px, py)
+        }
+        drawPath(line, snrColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
+    }
+}
+
+private class SignalSeries(
+    val avgSnr: List<Double?>, // per-bin mean SNR, null when the bin had no packets
+    val counts: IntArray,
+    val snrMin: Double, val snrMax: Double,
+    val startMs: Long, val endMs: Long,
+)
+
+/** Bin the RX history's time span into [bins] buckets of mean SNR + packet count. */
+private fun signalOverTime(history: List<RxLog>, bins: Int): SignalSeries? {
+    if (history.isEmpty()) return null
+    val end = history.first().receivedAtMs   // history is newest-first
+    val start = history.last().receivedAtMs
+    val span = (end - start).coerceAtLeast(1L)
+    val sums = DoubleArray(bins); val counts = IntArray(bins)
+    for (pkt in history) {
+        val f = ((pkt.receivedAtMs - start).toDouble() / span).coerceIn(0.0, 1.0)
+        val idx = (f * (bins - 1)).toInt()
+        sums[idx] += pkt.snrDb; counts[idx]++
+    }
+    val avg = (0 until bins).map { if (counts[it] > 0) sums[it] / counts[it] else null }
+    val present = avg.filterNotNull()
+    return SignalSeries(avg, counts, present.minOrNull() ?: 0.0, present.maxOrNull() ?: 1.0, start, end)
+}
+
+private fun hourLabel(ms: Long): String =
+    SimpleDateFormat("HH'h'", Locale.getDefault()).format(Date(ms))
+
+/** Histogram of raw packet length (bytes) over the RX history, with min/avg/max. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun PacketSizeCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val stats = remember(history) { distStats(history.map { it.length.toDouble() }) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Packet Size Distribution", style = MaterialTheme.typography.titleMedium)
+            Text("Raw packet length in bytes",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (stats == null) {
+                Text("No packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            Text("peak ${stats.counts.max()} / bin · ${stats.count} samples",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            DistributionHistogram(stats.counts, Color(0xFF8B5CF6), Modifier.fillMaxWidth().height(140.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                listOf(stats.min, (stats.min + stats.max) / 2, stats.max).forEach {
+                    Text("%.1f".format(it), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                StatInline("Min", "${stats.min.toInt()} B")
+                StatInline("Avg", "${stats.mean.roundToInt()} B")
+                StatInline("Max", "${stats.max.toInt()} B")
+            }
+        }
+    }
+}
+
 /** Histogram of relay-hop counts per packet, with avg/median/max and a direct-packet count. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -514,27 +712,70 @@ private fun hopStats(history: List<RxLog>): HopStats? {
 
 private data class RepeaterAgg(val label: String, val count: Int)
 
+/** A path node resolved within its region: a stable identity, a display label, and the best contact. */
+internal class ResolvedNode(val id: String, val label: String, val contact: Contact?)
+
+/**
+ * Region-scoped resolver for 1-byte path hops. Adverts carry the full public key, so a hop byte seen
+ * advertising in a given region resolves to an exact node — disambiguating the collisions that arise
+ * because the aggregate address book (and MQTT feed) spans many regions. Falls back to a contact by
+ * byte, then to the raw hash. Identity is the full-key prefix when known (so a node dedupes across
+ * regions), else "region:byte" (so the same byte in different regions is counted separately).
+ */
+internal class NodeResolver(history: List<RxLog>, private val contacts: List<Contact>) {
+    private val adv = HashMap<Pair<String, Int>, Pair<ByteArray, String?>>() // (region, byte) -> (key, name)
+    init {
+        for (pkt in history) {
+            val p = PacketInspector.parse(pkt.raw)
+            val key = p.advertPubKey?.takeIf { it.size >= 32 } ?: continue
+            adv.putIfAbsent(regionOf(pkt.region) to (key[0].toInt() and 0xFF),
+                key.copyOf(32) to p.advertName?.trim()?.takeIf { it.isNotBlank() })
+        }
+    }
+
+    fun resolve(region: String?, byte: Int): ResolvedNode {
+        val r = regionOf(region)
+        val a = adv[r to byte]
+        val key = a?.first
+        val byByte = { t: Int? -> contacts.firstOrNull { c ->
+            c.publicKey.isNotEmpty() && (c.publicKey[0].toInt() and 0xFF) == byte && (t == null || c.type == t)
+        } }
+        val contact = key?.let { k -> contacts.firstOrNull { it.publicKey.size >= 32 && it.publicKey.copyOf(32).contentEquals(k) } }
+            ?: byByte(ContactType.REPEATER) ?: byByte(null)
+        val label = contact?.name?.ifBlank { null } ?: a?.second ?: "0x%02X".format(byte)
+        val id = (key ?: contact?.publicKey?.takeIf { it.size >= 6 })?.copyOf(6)?.toHex() ?: "$r:$byte"
+        return ResolvedNode(id, label, contact)
+    }
+
+    companion object {
+        /** Region-less packets/contacts (BLE, or history from before region tagging) are assumed Ottawa. */
+        fun regionOf(region: String?): String = region ?: "YOW"
+    }
+}
+
 /**
  * Top nodes by how often they appear as a relay in packet paths (i.e. the busiest repeaters).
- * Path hops are 1-byte routing identities, resolved to a name via an advert or the aggregate book.
+ * Hops are resolved per-region so the same 1-byte hash in different regions isn't merged.
  */
 @Composable
 internal fun TopRepeatersCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val contacts by session.allContacts.collectAsStateWithLifecycle()
     val top = remember(history, contacts) {
-        val counts = HashMap<Int, Int>()
-        val advNames = HashMap<Int, String>() // best advert name seen for each routing byte
+        val resolver = NodeResolver(history, contacts)
+        val counts = HashMap<String, Int>()
+        val info = HashMap<String, ResolvedNode>()
         for (pkt in history) {
             val p = PacketInspector.parse(pkt.raw)
-            p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { name ->
-                p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { advNames.putIfAbsent(it[0].toInt() and 0xFF, name) }
-            }
             if (p.payloadType == PayloadType.TRACE) continue // path field holds SNRs, not hop hashes
-            p.pathHashes.forEach { h -> counts[h] = (counts[h] ?: 0) + 1 }
+            p.pathHashes.forEach { h ->
+                val rn = resolver.resolve(pkt.region, h)
+                counts[rn.id] = (counts[rn.id] ?: 0) + 1
+                info.putIfAbsent(rn.id, rn)
+            }
         }
         counts.entries.sortedByDescending { it.value }.take(16)
-            .map { RepeaterAgg(advNames[it.key] ?: talkerLabel(it.key, contacts), it.value) }
+            .map { RepeaterAgg(info.getValue(it.key).label, it.value) }
     }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -619,6 +860,89 @@ private fun RankBarRow(label: String, valueText: String, frac: Float, barColor: 
         Text(valueText, style = MaterialTheme.typography.labelMedium,
             fontFamily = FontFamily.Monospace, textAlign = TextAlign.End,
             modifier = Modifier.width(72.dp))
+    }
+}
+
+private data class PairAgg(val a: ResolvedNode, val b: ResolvedNode, val count: Int)
+
+/** Repeater pairs that co-occur most often in the same packet path (a co-appearance table). */
+@Composable
+internal fun RepeaterPairHeatmapCard(
+    session: MeshSession,
+    onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val contacts by session.allContacts.collectAsStateWithLifecycle()
+    val self by session.self.collectAsStateWithLifecycle()
+    val heard by session.heard.collectAsStateWithLifecycle()
+    var selected by remember { mutableStateOf<ResolvedNode?>(null) } // tapped node
+    val pairs = remember(history, contacts) {
+        val resolver = NodeResolver(history, contacts)
+        val counts = HashMap<Pair<String, String>, Int>()
+        val info = HashMap<String, ResolvedNode>()
+        for (pkt in history) {
+            val p = PacketInspector.parse(pkt.raw)
+            if (p.payloadType == PayloadType.TRACE) continue
+            // Resolve each hop within this packet's region, then count every distinct co-occurring pair.
+            val nodes = p.pathHashes.map { resolver.resolve(pkt.region, it) }.distinctBy { it.id }
+            nodes.forEach { info.putIfAbsent(it.id, it) }
+            for (i in nodes.indices) for (j in i + 1 until nodes.size) {
+                val a = nodes[i].id; val b = nodes[j].id
+                val key = if (a <= b) a to b else b to a
+                counts[key] = (counts[key] ?: 0) + 1
+            }
+        }
+        counts.entries.sortedByDescending { it.value }.take(15)
+            .map { PairAgg(info.getValue(it.key.first), info.getValue(it.key.second), it.value) }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Repeater Pair Heatmap", style = MaterialTheme.typography.titleMedium)
+            Text("Which repeaters frequently appear together in paths",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (pairs.isEmpty()) {
+                Text("No relayed packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                Text("Node A", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                Text("Node B", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                Text("Count", Modifier.width(56.dp), textAlign = TextAlign.End,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+            pairs.forEach { p ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(p.a.label, Modifier.weight(1f).clickable { selected = p.a }.padding(end = 4.dp),
+                        color = Color(0xFF60A5FA), style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(p.b.label, Modifier.weight(1f).clickable { selected = p.b }.padding(end = 4.dp),
+                        color = Color(0xFF60A5FA), style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${p.count}", Modifier.width(56.dp), textAlign = TextAlign.End,
+                        fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+
+    selected?.let { n ->
+        val c = n.contact
+        NodeDetailSheet(
+            name = n.label,
+            type = c?.type ?: ContactType.REPEATER,
+            isSelf = false,
+            contact = c,
+            heard = c?.let { ct -> heard.firstOrNull { it.pubKeyHex.startsWith(ct.keyPrefixHex) } },
+            self = self,
+            onDismiss = { selected = null },
+            onShowOnMap = { lat, lon -> selected = null; onShowOnMap(lat, lon) },
+        )
     }
 }
 

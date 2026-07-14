@@ -22,13 +22,17 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.ScatterPlot
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -109,8 +113,12 @@ fun ToolsContent(
             "msgtypes" -> AnalyticsTool("Message Types", { open = null }) { MessageTypeCard(session) }
             "snr" -> AnalyticsTool("SNR Distribution", { open = null }) { SnrDistributionCard(session) }
             "rssi" -> AnalyticsTool("RSSI Distribution", { open = null }) { RssiDistributionCard(session) }
+            "sigquality" -> AnalyticsTool("Signal Quality", { open = null }) { SignalQualityCard(session) }
+            "scatter" -> AnalyticsTool("SNR vs RSSI", { open = null }) { SnrRssiScatterCard(session) }
             "hops" -> AnalyticsTool("Hop Count", { open = null }) { HopCountDistributionCard(session) }
+            "size" -> AnalyticsTool("Packet Size", { open = null }) { PacketSizeCard(session) }
             "repeaters" -> AnalyticsTool("Top Repeaters", { open = null }) { TopRepeatersCard(session) }
+            "pairs" -> AnalyticsTool("Repeater Pairs", { open = null }) { RepeaterPairHeatmapCard(session, onShowOnMap) }
             "senders" -> AnalyticsTool("Top Senders", { open = null }) { TopSendersCard(session) }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -161,10 +169,18 @@ fun ToolsContent(
                     "Signal-to-noise histogram across received packets.") { open = "snr" }
                 ToolRow(Icons.Default.SignalCellularAlt, "RSSI Distribution",
                     "Received-signal-strength histogram across received packets.") { open = "rssi" }
+                ToolRow(Icons.Default.ShowChart, "Signal Quality",
+                    "Average SNR trend and packet volume over time.") { open = "sigquality" }
+                ToolRow(Icons.Default.ScatterPlot, "SNR vs RSSI",
+                    "Scatter of every packet by SNR and RSSI, over link-quality zones.") { open = "scatter" }
                 ToolRow(Icons.Default.Timeline, "Hop Count",
                     "Distribution of relay-hop counts per packet.") { open = "hops" }
+                ToolRow(Icons.Default.Straighten, "Packet Size",
+                    "Distribution of raw packet length in bytes.") { open = "size" }
                 ToolRow(Icons.Default.Hub, "Top Repeaters",
                     "Nodes appearing most often in packet paths.") { open = "repeaters" }
+                ToolRow(Icons.Default.GridView, "Repeater Pairs",
+                    "Repeaters that most often co-occur in the same path.") { open = "pairs" }
                 ToolRow(Icons.Default.Forum, "Top Senders",
                     "Channel messages ranked by sender.") { open = "senders" }
             }

@@ -91,77 +91,74 @@ fun buildTopology(
     val selfId = "self"
     val selfByte = self?.publicKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF }
 
-    // Harvest advert names from the WHOLE (persisted) history so labels resolve immediately —
-    // including nodes named in past sessions; build edges only from the recent slice.
-    val advNames = HashMap<Int, String>()
-    val chains = ArrayList<List<Int>>()
+    // Region-aware resolver: adverts carry the full key, so a hop resolves to an exact node within its
+    // region, disambiguating the 1-byte hashes that collide across the multi-region book. Contacts and
+    // BLE packets (no region) are assumed Ottawa (see NodeResolver.regionOf).
+    val resolver = NodeResolver(packets, nameBook)
+
+    // Observed packet relay chains, tagged with the packet's region (source → relays → us).
+    val chains = ArrayList<Pair<String?, List<Int>>>()
     packets.forEachIndexed { idx, pkt ->
+        if (idx >= edgeLimit) return@forEachIndexed
         val p = PacketInspector.parse(pkt.raw)
-        p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { name ->
-            val b = p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF }
-            if (b != null) advNames.putIfAbsent(b, name)
-        }
-        if (idx < edgeLimit && p.pathHashes.isNotEmpty()) {
-            val src = p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: p.srcHash
-            chains.add(buildList { src?.let { add(it) }; addAll(p.pathHashes) })
-        }
+        if (p.pathHashes.isEmpty()) return@forEachIndexed
+        val src = p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: p.srcHash
+        chains.add(pkt.region to buildList { src?.let { add(it) }; addAll(p.pathHashes) })
     }
 
-    // A routing byte is ambiguous when 2+ distinct known keys share it — the node then conflates them.
+    // A routing byte is ambiguous when 2+ distinct known keys share it and we couldn't pin an exact one.
     val keysByByte = HashMap<Int, MutableSet<String>>()
     for (c in nameBook) {
         val b = c.publicKey.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: continue
         keysByByte.getOrPut(b) { mutableSetOf() }.add(c.keyPrefixHex)
     }
-    fun ambiguous(b: Int) = (keysByByte[b]?.size ?: 0) > 1
-
-    fun byteId(b: Int) = "b:%02x".format(b)
-    // Label + kind for a byte: the aggregate address book (name/type), then an advert name, else hex.
-    fun labelKind(b: Int): Pair<String, TopoKind> {
-        val cs = nameBook.filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == b }
-        val kind = when {
-            cs.any { it.type == ContactType.REPEATER } -> TopoKind.Repeater
-            cs.any { it.type == ContactType.ROOM } -> TopoKind.Room
-            cs.isNotEmpty() -> TopoKind.Contact
-            else -> TopoKind.Unknown
-        }
-        val named = cs.mapNotNull { it.name.ifBlank { null } }
-        val label = when {
-            named.isNotEmpty() -> if (named.size == 1) named[0] else "${named[0]} +${named.size - 1}"
-            advNames[b] != null -> advNames.getValue(b)
-            else -> "0x%02X".format(b)
-        }
-        return label to kind
-    }
 
     val nodes = LinkedHashMap<String, TopoNode>()
     nodes[selfId] = TopoNode(selfId, self?.name?.ifBlank { "This node" } ?: "This node", TopoKind.Self)
     val edges = LinkedHashSet<TopoEdge>()
-    fun node(b: Int): String {
+    fun kindOf(type: Int?) = when (type) {
+        ContactType.REPEATER -> TopoKind.Repeater
+        ContactType.ROOM -> TopoKind.Room
+        null -> TopoKind.Unknown
+        else -> TopoKind.Contact
+    }
+    // A hop byte, resolved within [region] to an exact node when we've seen it advertise there.
+    fun node(region: String?, b: Int): String {
         if (selfByte != null && b == selfByte) return selfId
-        val id = byteId(b)
-        nodes.getOrPut(id) { val (l, k) = labelKind(b); TopoNode(id, l, k, ambiguous(b)) }
+        val rn = resolver.resolve(region, b)
+        nodes.getOrPut(rn.id) {
+            val ambiguous = rn.contact == null && (keysByByte[b]?.size ?: 0) > 1
+            TopoNode(rn.id, rn.label, kindOf(rn.contact?.type), ambiguous)
+        }
+        return rn.id
+    }
+    // A known contact endpoint — we hold its full key, so key it directly (matches the resolver's id).
+    fun nodeForContact(c: Contact): String {
+        val b = c.publicKey[0].toInt() and 0xFF
+        if (selfByte != null && b == selfByte) return selfId
+        val id = c.keyPrefixHex
+        nodes.getOrPut(id) { TopoNode(id, c.name.ifBlank { c.keyPrefixHex }, kindOf(c.type), false) }
         return id
     }
     fun edge(x: String, y: String) { if (x != y) edges.add(TopoEdge(x, y)) }
 
     var directCount = 0
     for (c in contacts) {
-        val cByte = c.publicKey.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: continue
+        if (c.publicKey.isEmpty()) continue
         when (val len = c.outPathLen) {
-            0 -> if (c.type == ContactType.REPEATER || c.type == ContactType.ROOM) edge(selfId, node(cByte))
+            0 -> if (c.type == ContactType.REPEATER || c.type == ContactType.ROOM) edge(selfId, nodeForContact(c))
             else directCount++
             in 1..63 -> {
                 var prev = selfId
-                for (i in 0 until len) { val h = node(c.outPath[i].toInt() and 0xFF); edge(prev, h); prev = h }
-                edge(prev, node(cByte))
+                for (i in 0 until len) { val h = node(null, c.outPath[i].toInt() and 0xFF); edge(prev, h); prev = h }
+                edge(prev, nodeForContact(c))
             }
         }
     }
-    // Fold in observed packet relay chains (source → relays → us).
-    chains.forEach { chain ->
+    // Fold in observed packet relay chains (source → relays → us), resolving each hop in its region.
+    chains.forEach { (region, chain) ->
         var prev: String? = null
-        chain.forEach { b -> val n = node(b); prev?.let { edge(it, n) }; prev = n }
+        chain.forEach { b -> val n = node(region, b); prev?.let { edge(it, n) }; prev = n }
         prev?.let { edge(it, selfId) }
     }
 
@@ -231,11 +228,13 @@ fun MeshTopologyScreen(
     var showMap by remember { mutableStateOf(false) }
     LaunchedEffect(session) { session.exportedContact.collect { exportedCard = it } }
 
-    // Resolve a graph node (1-byte identity) to the best matching contact (named repeater first).
+    // Resolve a graph node to its contact. Exact-key ids are the 6-byte key-prefix hex; the "region:byte"
+    // fallback ids resolve by byte (named repeater first).
     fun contactForNode(node: TopoNode): Contact? {
-        if (!node.id.startsWith("b:")) return null
-        val byte = node.id.substring(2).toIntOrNull(16) ?: return null
+        if (node.id == "self") return null
         val pool = contacts + allContacts.filterNot { a -> contacts.any { it.publicKey.contentEquals(a.publicKey) } }
+        if (!node.id.contains(':')) return pool.firstOrNull { it.keyPrefixHex == node.id }
+        val byte = node.id.substringAfter(':').toIntOrNull() ?: return null
         return pool.filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == byte }
             .sortedWith(compareByDescending<Contact> { it.name.isNotBlank() }
                 .thenByDescending { it.type == ContactType.REPEATER })
