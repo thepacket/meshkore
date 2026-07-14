@@ -103,6 +103,9 @@ fun PacketMonitorContent(
         packets.filter { log -> filter.matches(log, PacketInspector.parse(log.raw)) }
     }
 
+    // Region-aware name resolution for hop/source hashes (adverts' full keys, scoped by packet region).
+    val resolver = remember(packets, contacts) { NodeResolver(packets, contacts) }
+
     // When grouping is on, fold packets sharing a payload fingerprint (flood rebroadcasts of the
     // same content) into one group. Groups keep first-seen order (newest activity first); the
     // representative shown when collapsed is the earliest received copy.
@@ -153,12 +156,12 @@ fun PacketMonitorContent(
                 if (groupByHash) {
                     items(groups, key = { it.hash }) { g ->
                         if (g.members.size == 1) {
-                            PacketRow(g.rep, contacts, self, now) { detail = g.rep }
+                            PacketRow(g.rep, self, resolver, now) { detail = g.rep }
                         } else {
                             val expanded = expandedGroups[g.hash] == true
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 PacketRow(
-                                    g.rep, contacts, self, now,
+                                    g.rep, self, resolver, now,
                                     badge = "×${g.members.size}",
                                     expanded = expanded,
                                     onToggle = { expandedGroups[g.hash] = !expanded },
@@ -166,7 +169,7 @@ fun PacketMonitorContent(
                                 if (expanded) {
                                     g.members.filter { it !== g.rep }.forEach { m ->
                                         Box(Modifier.padding(start = 16.dp)) {
-                                            PacketRow(m, contacts, self, now) { detail = m }
+                                            PacketRow(m, self, resolver, now) { detail = m }
                                         }
                                     }
                                 }
@@ -175,7 +178,7 @@ fun PacketMonitorContent(
                     }
                 } else {
                     items(filtered, key = { System.identityHashCode(it) }) { p ->
-                        PacketRow(p, contacts, self, now) { detail = p }
+                        PacketRow(p, self, resolver, now) { detail = p }
                     }
                 }
             }
@@ -184,9 +187,9 @@ fun PacketMonitorContent(
 
     detail?.let { log ->
         val parsed = remember(log) { PacketInspector.parse(log.raw) }
-        val srcKey = sourcePubKey(parsed, contacts)
+        val srcKey = sourcePubKey(parsed, log.region, resolver)
         PacketDetailDialog(
-            log, parsed, contacts, self, onShowOnMap,
+            log, parsed, contacts, self, resolver, onShowOnMap,
             channels = channels,
             outgoing = messages.values.flatten().filter { !it.incoming },
             allPackets = packets,
@@ -204,12 +207,11 @@ fun PacketMonitorContent(
     }
 }
 
-/** Full 32-byte public key of a packet's source, if recoverable (advert body, else src-hash contact). */
-private fun sourcePubKey(p: ParsedPacket, contacts: List<Contact>): ByteArray? {
+/** Full 32-byte public key of a packet's source, if recoverable (advert body, else region-scoped src). */
+private fun sourcePubKey(p: ParsedPacket, region: String?, resolver: NodeResolver): ByteArray? {
     p.advertPubKey?.let { if (it.size >= 32) return it.copyOf(32) }
     p.srcHash?.let { hash ->
-        contacts.firstOrNull { it.publicKey.size >= 32 && (it.publicKey[0].toInt() and 0xFF) == hash }
-            ?.let { return it.publicKey }
+        resolver.resolve(region, hash).contact?.takeIf { it.publicKey.size >= 32 }?.let { return it.publicKey }
     }
     return null
 }
@@ -220,6 +222,7 @@ private fun PacketDetailDialog(
     p: ParsedPacket,
     contacts: List<Contact>,
     self: SelfInfo?,
+    resolver: NodeResolver,
     onShowOnMap: (lat: Double, lon: Double) -> Unit,
     channels: List<ChannelEntry>,
     outgoing: List<ChatMessage>,
@@ -228,7 +231,7 @@ private fun PacketDetailDialog(
     onDiscoverPath: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
-    val srcPos = sourcePosition(p, contacts)
+    val srcPos = sourcePosition(p, log.region, resolver)
     val group = remember(log, channels) { decodeGroup(p, channels) }
     val copies = remember(log, allPackets) { rebroadcastCopies(log, allPackets) }
     AlertDialog(
@@ -245,8 +248,8 @@ private fun PacketDetailDialog(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     kv("Route", "${p.routeName}  (v${p.version})")
-                    p.srcHash?.let { kv("Source", resolveHash(it, contacts, self)) }
-                    p.destHash?.let { kv("Destination", resolveHash(it, contacts, self)) }
+                    p.srcHash?.let { kv("Source", resolveHash(it, log.region, resolver, self)) }
+                    p.destHash?.let { kv("Destination", resolveHash(it, log.region, resolver, self)) }
 
                     // Group message: resolve the channel and, when we hold its key, the cleartext.
                     p.channelHash?.let { h ->
@@ -264,10 +267,10 @@ private fun PacketDetailDialog(
                         kv("Hop SNRs", if (p.traceHopSnrsQ.isEmpty()) "(no hops yet)"
                             else p.traceHopSnrsQ.joinToString(", ") { "%.1f".format(it / 4.0) } + " dB")
                         if (p.traceRoute.isNotEmpty())
-                            kv("Trace route", p.traceRoute.joinToString(" → ") { hopLabel(it, contacts, self) })
+                            kv("Trace route", p.traceRoute.joinToString(" → ") { hopLabel(it, log.region, resolver) })
                     } else {
                         kv("Path", if (p.pathHashes.isEmpty()) "direct (0 hops)"
-                            else "${p.pathHashes.size} hop(s): " + p.pathHashes.joinToString(" → ") { hopLabel(it, contacts, self) })
+                            else "${p.pathHashes.size} hop(s): " + p.pathHashes.joinToString(" → ") { hopLabel(it, log.region, resolver) })
                     }
                     p.transportCodes?.let { kv("Transport", "0x%04X, 0x%04X".format(it[0], it[1])) }
                     p.mac?.let { kv("MAC", it.toHex()) }
@@ -308,7 +311,7 @@ private fun PacketDetailDialog(
                     if (copies > 1) kv("Seen", "$copies copies in log (flood rebroadcasts)")
 
                     if (onDiscoverPath != null) {
-                        PathSection(pathResult, onDiscoverPath) { hopLabel(it, contacts, self) }
+                        PathSection(pathResult, onDiscoverPath) { hopLabel(it, log.region, resolver) }
                     }
 
                     Text("Raw", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
@@ -417,21 +420,18 @@ private fun kv(label: String, value: String) {
     }
 }
 
-/** Resolve a 1-byte routing hash (= first public-key byte) to contact name(s). */
-private fun resolveHash(hash: Int, contacts: List<Contact>, self: SelfInfo?): String {
-    val names = contacts.filter { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hash }
-        .map { it.name.ifBlank { it.keyPrefixHex } }
-        .toMutableList()
-    if (self != null && self.publicKey.isNotEmpty() && (self.publicKey[0].toInt() and 0xFF) == hash) names.add("(me)")
+/** Resolve a 1-byte routing hash to a name within the packet's [region] (exact via adverts' keys). */
+private fun resolveHash(hash: Int, region: String?, resolver: NodeResolver, self: SelfInfo?): String {
     val tag = "0x%02X".format(hash)
-    return if (names.isEmpty()) "$tag · unknown" else "$tag · ${names.joinToString("/")}"
+    val parts = mutableListOf<String>()
+    val label = resolver.resolve(region, hash).label
+    if (!label.startsWith("0x")) parts.add(label) // add the resolved name unless it's just the hex
+    if (self != null && self.publicKey.isNotEmpty() && (self.publicKey[0].toInt() and 0xFF) == hash) parts.add("(me)")
+    return if (parts.isEmpty()) "$tag · unknown" else "$tag · ${parts.joinToString(" · ")}"
 }
 
-private fun hopLabel(hash: Int, contacts: List<Contact>, self: SelfInfo?): String {
-    val name = contacts.firstOrNull { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hash }
-        ?.name?.ifBlank { null }
-    return name ?: "0x%02X".format(hash)
-}
+private fun hopLabel(hash: Int, region: String?, resolver: NodeResolver): String =
+    resolver.resolve(region, hash).label
 
 private fun resolveKey(key: ByteArray, contacts: List<Contact>, self: SelfInfo?): String {
     if (self != null && self.publicKey.size >= 32 && self.publicKey.copyOf(32).contentEquals(key.copyOf(32))) return "(this node)"
@@ -456,8 +456,8 @@ private data class PacketGroup(val hash: Long, val rep: RxLog, val members: List
 @Composable
 private fun PacketRow(
     p: RxLog,
-    contacts: List<Contact>,
     self: SelfInfo?,
+    resolver: NodeResolver,
     now: Long,                       // ticks each second so the relative age re-renders
     badge: String? = null,           // e.g. "×3" — a hash-group summary count
     expanded: Boolean = false,
@@ -465,9 +465,9 @@ private fun PacketRow(
     onClick: () -> Unit,
 ) {
     val parsed = remember(p) { PacketInspector.parse(p.raw) }
-    val source = rowSource(parsed, contacts, self)
+    val source = rowSource(parsed, p.region, resolver, self)
     val selfHasGps = self != null && (self.advLat != 0 || self.advLon != 0)
-    val srcPos = sourcePosition(parsed, contacts)
+    val srcPos = sourcePosition(parsed, p.region, resolver)
     val distanceKm = if (selfHasGps && srcPos != null)
         haversineKm(self!!.advLat / 1e6, self.advLon / 1e6, srcPos.first, srcPos.second) else null
     Row(
@@ -524,33 +524,29 @@ private fun PacketRow(
     }
 }
 
-/** Source GPS (lat, lon in degrees) for a packet: advert body, else the resolved contact. */
-private fun sourcePosition(p: ParsedPacket, contacts: List<Contact>): Pair<Double, Double>? {
+/** Source GPS (lat, lon in degrees): advert body, else the region-scoped resolved contact. */
+private fun sourcePosition(p: ParsedPacket, region: String?, resolver: NodeResolver): Pair<Double, Double>? {
     val lat = p.advertLat; val lon = p.advertLon
     if (lat != null && lon != null && (lat != 0 || lon != 0)) return (lat / 1e6) to (lon / 1e6)
     val c = p.advertPubKey?.let { key ->
-        contacts.firstOrNull { it.publicKey.size >= 32 && it.publicKey.copyOf(32).contentEquals(key.copyOf(32)) }
-    } ?: p.srcHash?.let { hash ->
-        contacts.firstOrNull { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hash }
-    }
+        resolver.contacts.firstOrNull { it.publicKey.size >= 32 && it.publicKey.copyOf(32).contentEquals(key.copyOf(32)) }
+    } ?: p.srcHash?.let { hash -> resolver.resolve(region, hash).contact }
     val cLat = c?.latDegrees ?: return null
     val cLon = c.lonDegrees ?: return null
     return cLat to cLon
 }
 
-/** A short source label for the list row: advertiser, or src-hash → contact, else null. */
-private fun rowSource(p: ParsedPacket, contacts: List<Contact>, self: SelfInfo?): String? {
+/** A short source label for the list row: advertiser, or src-hash → node (region-scoped), else null. */
+private fun rowSource(p: ParsedPacket, region: String?, resolver: NodeResolver, self: SelfInfo?): String? {
     p.advertName?.takeIf { it.isNotBlank() }?.let { return it }
-    p.advertPubKey?.let { return resolveKeyShort(it, contacts, self) }
-    p.srcHash?.let { return nameForHash(it, contacts, self) }
+    p.advertPubKey?.let { return resolveKeyShort(it, resolver.contacts, self) }
+    p.srcHash?.let { return nameForHash(it, region, resolver, self) }
     return null
 }
 
-private fun nameForHash(hash: Int, contacts: List<Contact>, self: SelfInfo?): String {
-    contacts.firstOrNull { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == hash }
-        ?.name?.ifBlank { null }?.let { return it }
+private fun nameForHash(hash: Int, region: String?, resolver: NodeResolver, self: SelfInfo?): String {
     if (self != null && self.publicKey.isNotEmpty() && (self.publicKey[0].toInt() and 0xFF) == hash) return "(me)"
-    return "0x%02X".format(hash)
+    return resolver.resolve(region, hash).label
 }
 
 private fun resolveKeyShort(key: ByteArray, contacts: List<Contact>, self: SelfInfo?): String {

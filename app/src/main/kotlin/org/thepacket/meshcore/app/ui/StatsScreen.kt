@@ -722,7 +722,7 @@ internal class ResolvedNode(val id: String, val label: String, val contact: Cont
  * byte, then to the raw hash. Identity is the full-key prefix when known (so a node dedupes across
  * regions), else "region:byte" (so the same byte in different regions is counted separately).
  */
-internal class NodeResolver(history: List<RxLog>, private val contacts: List<Contact>) {
+internal class NodeResolver(history: List<RxLog>, val contacts: List<Contact>) {
     private val adv = HashMap<Pair<String, Int>, Pair<ByteArray, String?>>() // (region, byte) -> (key, name)
     init {
         for (pkt in history) {

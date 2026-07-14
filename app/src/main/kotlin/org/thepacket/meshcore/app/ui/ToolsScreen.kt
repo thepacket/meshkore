@@ -105,7 +105,7 @@ fun ToolsContent(
 
     Box(modifier.fillMaxSize()) {
         when (open) {
-            "trace" -> TraceTool(session, contacts, self) { open = null }
+            "trace" -> TraceTool(session, self) { open = null }
             "discover" -> DiscoverTool(session, self, onShowOnMap) { open = null }
             "rawdata" -> RawDataTool(session, contacts, ::notify) { open = null }
             "topology" -> MeshTopologyScreen(session, onShowOnMap) { open = null }
@@ -388,10 +388,13 @@ private fun AnalyticsTool(title: String, onBack: () -> Unit, card: @Composable (
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfInfo?, onBack: () -> Unit) {
+private fun TraceTool(session: MeshSession, self: SelfInfo?, onBack: () -> Unit) {
     val result by session.traceResult.collectAsStateWithLifecycle()
     val heard by session.heard.collectAsStateWithLifecycle()
     val allContacts by session.allContacts.collectAsStateWithLifecycle()
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    // Trace runs on our own (home) mesh — resolve hop bytes within the home region (Ottawa default).
+    val resolver = remember(history, allContacts) { NodeResolver(history, allContacts) }
     val selected = remember { mutableStateListOf<Contact>() } // ordered path (duplicates allowed)
     val r = result
 
@@ -452,8 +455,7 @@ private fun TraceTool(session: MeshSession, contacts: List<Contact>, self: SelfI
                 } else {
                     Text("Result", style = MaterialTheme.typography.titleMedium)
                     r.hops.forEachIndexed { i, h ->
-                        val name = contacts.firstOrNull { it.publicKey.isNotEmpty() && (it.publicKey[0].toInt() and 0xFF) == h.hashByte }
-                            ?.name?.ifBlank { null } ?: "0x%02X".format(h.hashByte)
+                        val name = resolver.resolve(null, h.hashByte).label
                         kvRowMono("${i + 1}. $name", "SNR ${h.snrDb} dB")
                     }
                     kvRowMono("→ this node", "SNR ${r.finalSnrDb} dB")
