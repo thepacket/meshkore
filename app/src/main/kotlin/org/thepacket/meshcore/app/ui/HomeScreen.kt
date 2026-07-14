@@ -161,8 +161,10 @@ private fun AllContactsList(
 
     // Keys already present on the connected device — so we can show what a push would add.
     val onDeviceKeys = remember(deviceContacts) { deviceContacts.map { it.publicKey.toHex() }.toSet() }
-    val missingCount = remember(allContacts, onDeviceKeys) {
-        allContacts.count { it.publicKey.toHex() !in onDeviceKeys }
+    val pushTypes by session.pushTypes.collectAsStateWithLifecycle()
+    // Only the user-selected contact types get pushed, so the count reflects those.
+    val missingCount = remember(allContacts, onDeviceKeys, pushTypes) {
+        allContacts.count { it.type in pushTypes && it.publicKey.toHex() !in onDeviceKeys }
     }
 
     // Split the region-scoped address book by type once, so each filter tab shows a live count.

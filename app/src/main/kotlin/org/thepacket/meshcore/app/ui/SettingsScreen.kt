@@ -61,6 +61,7 @@ import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.app.MqttStatus
 import org.thepacket.meshcore.app.NotifyPrefs
 import org.thepacket.meshcore.protocol.AutoAdd
+import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.hexToBytes
 
@@ -333,6 +334,23 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
                 if (aaOverwrite) flags = flags or AutoAdd.OVERWRITE_OLDEST
                 session.applyAutoAdd(flags, maxHops.toIntOrNull() ?: 0)
             }
+        }
+
+        // ---- Contacts pushed to device (app-local; the observed book collects everything) ----
+        val pushTypes by session.pushTypes.collectAsStateWithLifecycle()
+        SectionCard("Contacts pushed to device") {
+            Text(
+                "The address book collects every observed node (companion + MQTT). Only the selected " +
+                    "types are added to the connected device by \"Send to device\".",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            fun setType(type: Int, on: Boolean) =
+                session.setPushTypes(if (on) pushTypes + type else pushTypes - type)
+            SwitchRow("Chat nodes", ContactType.CHAT in pushTypes) { setType(ContactType.CHAT, it) }
+            SwitchRow("Repeaters", ContactType.REPEATER in pushTypes) { setType(ContactType.REPEATER, it) }
+            SwitchRow("Rooms", ContactType.ROOM in pushTypes) { setType(ContactType.ROOM, it) }
+            SwitchRow("Sensors", ContactType.SENSOR in pushTypes) { setType(ContactType.SENSOR, it) }
         }
 
         // ---- Tuning ----

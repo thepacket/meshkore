@@ -83,8 +83,11 @@ Analytics (work from the packet history, with or without a device):
 meshcore.ca feed, so each packet is tagged with its region (from the MQTT topic) and hops are resolved
 per region using adverts' full public keys; region-less packets/contacts are assumed Ottawa. This keeps
 Top Talkers / Top Repeaters / Repeater Pairs / topology **and the packet monitor** from merging distinct
-nodes that share a hash. **Contacts are regional** — a contact learns its region from an observed advert,
-survives restarts, and the **All contacts** list gains a region filter when the book spans 2+ regions.
+nodes that share a hash. **Contacts are regional** — every observed advert (companion or MQTT) becomes a
+contact tagged with the region it was heard in (survives restarts), and the **All contacts** list gains a
+region filter when the book spans 2+ regions. The aggregate book collects *every* observed node, but only
+the contact **types you select** (Settings → *Contacts pushed to device*; chat by default) are sent to a
+connected companion.
 
 **Settings** — full editable device config: node name, region presets, frequency / bandwidth / SF /
 coding rate, TX power, client-repeat (with allowed-frequency guard), advertised position (typed, picked

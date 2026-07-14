@@ -98,6 +98,7 @@ class MeshSession(
     private val adminPrefs: AdminPrefs? = null,
     private val contactStore: ContactStore? = null,
     private val packetStore: PacketStore? = null,
+    private val contactPrefs: ContactPrefs? = null,
 ) {
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
@@ -123,6 +124,11 @@ class MeshSession(
      */
     private val _allContacts = MutableStateFlow<List<Contact>>(emptyList())
     val allContacts: StateFlow<List<Contact>> = _allContacts.asStateFlow()
+
+    /** Which contact types the user wants pushed onto the connected device (default: chat only). */
+    private val _pushTypes = MutableStateFlow(contactPrefs?.pushTypes ?: setOf(ContactType.CHAT))
+    val pushTypes: StateFlow<Set<Int>> = _pushTypes.asStateFlow()
+    fun setPushTypes(types: Set<Int>) { _pushTypes.value = types; contactPrefs?.pushTypes = types }
 
     /** Emitted after a "send all contacts to device" push completes, carrying the count sent. */
     private val _contactPushResult = MutableSharedFlow<Int>(extraBufferCapacity = 4)
@@ -349,21 +355,35 @@ class MeshSession(
         _packets.update { (listOf(log) + it).take(MAX_PACKETS) }
         _packetHistory.update { (listOf(log) + it).take(MAX_PACKET_HISTORY) }
         schedulePacketSave()
-        // An observed ADVERT is a station heard on the air — feed it into the Heard list too,
-        // exactly like the device's own AdvertHeard/NewAdvert pushes do over BLE. Adverts carry
-        // the full 32-byte public key (and optionally a name/type/location) in the clear.
-        if (log.payloadType == PayloadType.ADVERT) injectAdvertToHeard(log)
+        // An observed ADVERT is a station heard on the air — create/refresh a regional contact and
+        // feed the Heard list, whether it arrived over MQTT or the companion's own radio.
+        if (log.payloadType == PayloadType.ADVERT) ingestAdvert(log)
     }
 
-    /** Decode an observed ADVERT packet and upsert the station into the Heard list. */
-    private fun injectAdvertToHeard(log: RxLog) {
+    /**
+     * Decode an observed ADVERT (from MQTT or the companion) into a regional contact + a Heard entry.
+     * Adverts carry the full 32-byte public key (and optionally name/type/location) in the clear, so
+     * every observed node becomes a contact tagged with the region it was heard in (null over BLE = home).
+     */
+    private fun ingestAdvert(log: RxLog) {
         val p = PacketInspector.parse(log.raw)
-        val key = p.advertPubKey ?: return
-        // Learn the node's region from where we observed it (the MQTT topic) — tags known contacts.
-        tagContactRegion(key, log.region)
+        val key = p.advertPubKey?.takeIf { it.size >= 32 }?.copyOf(32) ?: return
         val hex = key.toHex()
-        // Prefer the advert's own name; else a known contact's name; else the hex prefix (the
-        // Heard UI re-resolves hex-only names against the aggregate book anyway).
+        upsertObservedContact(
+            Contact(
+                publicKey = key,
+                type = p.advertType ?: ContactType.CHAT,
+                flags = 0,
+                outPathLen = 0xFF, // path unknown until learned
+                outPath = ByteArray(64),
+                name = p.advertName?.trim().orEmpty(),
+                lastAdvert = p.advertTimestamp ?: (log.receivedAtMs / 1000),
+                gpsLat = p.advertLat ?: 0,
+                gpsLon = p.advertLon ?: 0,
+                lastMod = log.receivedAtMs / 1000,
+                region = log.region,
+            )
+        )
         val known = _contacts.value.firstOrNull { it.publicKey.contentEquals(key) }
             ?: _allContacts.value.firstOrNull { it.publicKey.contentEquals(key) }
         val name = p.advertName?.takeIf { it.isNotBlank() } ?: known?.name ?: hex.take(12)
@@ -378,6 +398,47 @@ class MeshSession(
                 gpsLon = p.advertLon ?: known?.gpsLon ?: 0,
             )
         )
+    }
+
+    /**
+     * Insert or refresh an advert-observed contact in the aggregate book. Deduped by full key; a name
+     * never regresses to blank and a known region is kept. Disk saves are debounced so a busy advert
+     * stream doesn't thrash storage. Only writes when a stored field actually changed.
+     */
+    private fun upsertObservedContact(c: Contact) {
+        val list = _allContacts.value
+        val idx = list.indexOfFirst { it.publicKey.contentEquals(c.publicKey) }
+        val merged = if (idx < 0) c else list[idx].let { ex ->
+            ex.copy(
+                name = c.name.ifBlank { ex.name },
+                type = if (c.type != ContactType.NONE) c.type else ex.type,
+                lastAdvert = maxOf(c.lastAdvert, ex.lastAdvert),
+                gpsLat = if (c.gpsLat != 0 || c.gpsLon != 0) c.gpsLat else ex.gpsLat,
+                gpsLon = if (c.gpsLat != 0 || c.gpsLon != 0) c.gpsLon else ex.gpsLon,
+                region = c.region ?: ex.region,
+                lastMod = maxOf(c.lastMod, ex.lastMod),
+            )
+        }
+        if (idx >= 0) {
+            val ex = list[idx]
+            // Skip re-adverts that only bump recency — updating the whole book on every advert would
+            // thrash storage and recomposition. Only a material change (name/type/gps/region) emits.
+            val material = merged.name != ex.name || merged.type != ex.type || merged.gpsLat != ex.gpsLat ||
+                merged.gpsLon != ex.gpsLon || merged.region != ex.region || merged.outPathLen != ex.outPathLen
+            if (!material) return
+        }
+        _allContacts.value = if (idx < 0) list + merged else list.toMutableList().also { it[idx] = merged }
+        scheduleContactSave()
+        // Reflect a newly-learned region on the device-contacts view too, if this node is on the device.
+        if (merged.region != null) {
+            _contacts.update { l -> l.map { if (it.publicKey.contentEquals(c.publicKey) && it.region != merged.region) it.copy(region = merged.region) else it } }
+        }
+    }
+
+    private var contactSaveJob: Job? = null
+    private fun scheduleContactSave() {
+        if (contactSaveJob?.isActive == true) return
+        contactSaveJob = scope.launch { delay(3000); runCatching { contactStore?.save(_allContacts.value) } }
     }
 
     /**
@@ -916,18 +977,6 @@ class MeshSession(
             a.lastAdvert == b.lastAdvert && a.gpsLat == b.gpsLat && a.gpsLon == b.gpsLon &&
             a.outPathLen == b.outPathLen && a.region == b.region
 
-    /**
-     * Tag a known contact with the region an advert was observed in (from the MQTT topic). Non-flooding:
-     * only writes when the region is newly known or changed, so a node's region is learned once and kept.
-     */
-    private fun tagContactRegion(key: ByteArray, region: String?) {
-        if (region.isNullOrBlank()) return
-        val existing = _allContacts.value.firstOrNull { it.publicKey.contentEquals(key) } ?: return
-        if (existing.region == region) return
-        _allContacts.update { list -> list.map { if (it.publicKey.contentEquals(key)) it.copy(region = region) else it } }
-        contactStore?.save(_allContacts.value)
-        _contacts.update { list -> list.map { if (it.publicKey.contentEquals(key)) it.copy(region = region) else it } }
-    }
 
     /**
      * Push the entire aggregate address book onto the connected device, skipping contacts the
@@ -936,7 +985,9 @@ class MeshSession(
      */
     fun pushAllContactsToDevice() {
         val onDevice = _contacts.value
-        val toPush = _allContacts.value.filterNot { c ->
+        // Only push the contact types the user selected — the book holds every observed node, but a
+        // companion only wants the chosen kinds (chat by default).
+        val toPush = _allContacts.value.filter { it.type in _pushTypes.value }.filterNot { c ->
             onDevice.any { it.publicKey.contentEquals(c.publicKey) }
         }
         scope.launch {
@@ -1370,9 +1421,11 @@ class MeshSession(
                 _packets.update { (listOf(f.log) + it).take(MAX_PACKETS) }
                 _packetHistory.update { (listOf(f.log) + it).take(MAX_PACKET_HISTORY) }
                 schedulePacketSave()
-                // Remember the signal of the latest advert packet to attach to the advert push.
+                // Remember the signal of the latest advert packet to attach to the advert push, and
+                // fold the advertised node into the address book (region null over BLE = home).
                 if (f.log.payloadType == PayloadType.ADVERT) {
                     lastAdvertSnrQ = f.log.snrQ; lastAdvertRssi = f.log.rssi
+                    ingestAdvert(f.log)
                 }
             }
             is Incoming.RawData -> _rawData.update { (listOf(f.frame) + it).take(MAX_PACKETS) }
