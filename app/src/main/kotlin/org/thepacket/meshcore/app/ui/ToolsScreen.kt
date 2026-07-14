@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
@@ -119,6 +120,7 @@ fun ToolsContent(
             "size" -> AnalyticsTool("Packet Size", { open = null }) { PacketSizeCard(session) }
             "repeaters" -> AnalyticsTool("Top Repeaters", { open = null }) { TopRepeatersCard(session) }
             "pairs" -> AnalyticsTool("Repeater Pairs", { open = null }) { RepeaterPairHeatmapCard(session, onShowOnMap) }
+            "hashsize" -> AnalyticsTool("Hash Size", { open = null }) { HashSizeCard(session) }
             "senders" -> AnalyticsTool("Top Senders", { open = null }) { TopSendersCard(session) }
             else -> Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -181,6 +183,8 @@ fun ToolsContent(
                     "Nodes appearing most often in packet paths.") { open = "repeaters" }
                 ToolRow(Icons.Default.GridView, "Repeater Pairs",
                     "Repeaters that most often co-occur in the same path.") { open = "pairs" }
+                ToolRow(Icons.Default.Tag, "Hash Size",
+                    "Path-hash sizes (1/2/3-byte routing IDs) across packets and repeaters.") { open = "hashsize" }
                 ToolRow(Icons.Default.Forum, "Top Senders",
                     "Channel messages ranked by sender.") { open = "senders" }
             }

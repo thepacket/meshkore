@@ -949,6 +949,106 @@ internal fun RepeaterPairHeatmapCard(
     }
 }
 
+private val HASH_SIZE_COLORS = mapOf(1 to Color(0xFFEF4444), 2 to Color(0xFF4ADE80), 3 to Color(0xFF60A5FA), 4 to Color(0xFFA78BFA))
+
+/** Full hop-hash hex list + hash size for a packet's path, or null (no path / TRACE). */
+private fun pathHops(raw: ByteArray): Pair<Int, List<String>>? {
+    if (raw.isEmpty()) return null
+    val header = raw[0].toInt() and 0xFF
+    val route = header and 0x03
+    if (((header ushr 2) and 0x0F) == PayloadType.TRACE) return null // path field holds SNRs, not hops
+    var i = 1
+    if ((route == RouteType.TRANSPORT_FLOOD || route == RouteType.TRANSPORT_DIRECT) && raw.size >= i + 4) i += 4
+    if (raw.size <= i) return null
+    val pl = raw[i].toInt() and 0xFF; i++
+    val count = pl and 63
+    val size = (pl ushr 6) + 1
+    if (count == 0 || raw.size < i + count * size) return null
+    return size to (0 until count).map { raw.copyOfRange(i + it * size, i + it * size + size).toHex() }
+}
+
+private class HashSizeStats(
+    val packetsWithHops: Int, val bySizePackets: Map<Int, Int>,
+    val totalUnique: Int, val uniqueBySize: Map<Int, Int>,
+)
+
+private fun hashSizeStats(history: List<RxLog>): HashSizeStats {
+    var packetsWithHops = 0
+    val bySize = HashMap<Int, Int>()
+    val uniq = HashMap<Int, HashSet<String>>()
+    for (pkt in history) {
+        val (size, hops) = pathHops(pkt.raw) ?: continue
+        packetsWithHops++
+        bySize[size] = (bySize[size] ?: 0) + 1
+        // Region-scope uniqueness: the same hop hash in two regions is two distinct repeaters.
+        val region = NodeResolver.regionOf(pkt.region)
+        uniq.getOrPut(size) { HashSet() }.addAll(hops.map { "$region:$it" })
+    }
+    return HashSizeStats(packetsWithHops, bySize, uniq.values.sumOf { it.size }, uniq.mapValues { it.value.size })
+}
+
+/** Distribution of path-hash sizes (1/2/3-byte routing IDs) over packets, and by unique repeater. */
+@Composable
+internal fun HashSizeCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val s = remember(history) { hashSizeStats(history) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Hash Size Distribution", style = MaterialTheme.typography.titleMedium)
+            Text("%,d packets with path hops".format(s.packetsWithHops),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (s.packetsWithHops == 0) {
+                Text("No path hops yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            val sizes = (s.bySizePackets.keys + s.uniqueBySize.keys).sorted()
+            val maxP = s.bySizePackets.values.maxOrNull() ?: 1
+            sizes.forEach { sz ->
+                HashSizeRow("$sz-byte", hashSizeDetail(sz), s.bySizePackets[sz] ?: 0, s.packetsWithHops, maxP,
+                    HASH_SIZE_COLORS[sz] ?: Color(0xFF94A3B8))
+            }
+
+            Text("By Repeaters", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 6.dp))
+            Text("%,d unique repeaters".format(s.totalUnique),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            val maxR = s.uniqueBySize.values.maxOrNull() ?: 1
+            sizes.forEach { sz ->
+                HashSizeRow("$sz-byte", null, s.uniqueBySize[sz] ?: 0, s.totalUnique, maxR,
+                    (HASH_SIZE_COLORS[sz] ?: Color(0xFF94A3B8)).copy(alpha = 0.6f))
+            }
+        }
+    }
+}
+
+private fun hashSizeDetail(size: Int): String = "(${size * 8}-bit, %,d IDs)".format(1L shl (size * 8))
+
+@Composable
+private fun HashSizeRow(title: String, detail: String?, count: Int, total: Int, max: Int, color: Color) {
+    val frac = if (max > 0) count.toFloat() / max else 0f
+    val pct = if (total > 0) count * 100.0 / total else 0.0
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                detail?.let {
+                    Text(" $it", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+            Text("%,d (%.1f%%)".format(count, pct), style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace)
+        }
+        Box(Modifier.fillMaxWidth().height(14.dp).clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))) {
+            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(color))
+        }
+    }
+}
+
 /**
  * A signal-quality histogram card: binned distribution over the persisted RX history, with the
  * min/mean/median/max and standard deviation summarised below the bars. [fmt] renders the summary
