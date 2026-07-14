@@ -86,7 +86,6 @@ fun StatsContent(
         TopRepeatersCard(session)
         radio?.let { RadioCard(it) }
         core?.let { CoreCard(it) }
-        packets?.let { PacketsCard(it) }
         TelemetryCard(telemetry, onRefreshTelemetry)
         NoiseCard(noiseHistory, radio?.noiseFloor)
         if (radio == null && core == null) {
@@ -707,20 +706,6 @@ private fun CoreCard(s: CoreStats) {
             StatRow("Uptime", fmtDuration(s.uptimeSecs))
             StatRow("TX queue", "${s.txQueueLen}")
             if (s.errFlags != 0) StatRow("Error flags", "0x%04X".format(s.errFlags))
-        }
-    }
-}
-
-@Composable
-private fun PacketsCard(s: PacketStats) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Packets", style = MaterialTheme.typography.titleMedium)
-            StatRow("Received", "${s.recv}")
-            StatRow("Sent", "${s.sent}")
-            StatRow("Recv flood / direct", "${s.recvFlood} / ${s.recvDirect}")
-            StatRow("Sent flood / direct", "${s.sentFlood} / ${s.sentDirect}")
-            StatRow("Recv errors", "${s.recvErrors}")
         }
     }
 }
