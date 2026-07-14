@@ -126,7 +126,8 @@ fun MainScaffold(
             MainTab.Chats -> HomeContent(session, self, channels, contacts, onOpenConversation, m, onShowOnMap, chatsTab, onChatsTab)
             MainTab.Heard -> HeardContent(heard, contacts, self, session, m, onShowOnMap)
             MainTab.Packets -> PacketMonitorContent(
-                packets, contacts, self, session, m, onShowOnMap,
+                // Use the aggregate (global) address book so names resolve for nodes not on this device.
+                packets, allContacts, self, session, m, onShowOnMap,
                 filter = packetFilter, onFilterChange = onPacketFilter,
                 groupByHash = packetGroupByHash, onGroupByHashChange = onPacketGroupByHash,
             )

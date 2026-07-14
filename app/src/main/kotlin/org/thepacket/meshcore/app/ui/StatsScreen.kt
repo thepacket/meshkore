@@ -5,12 +5,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -34,9 +37,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.MeshSession
@@ -51,6 +57,8 @@ import org.thepacket.meshcore.protocol.PayloadType
 import org.thepacket.meshcore.protocol.RadioStats
 import org.thepacket.meshcore.protocol.RouteType
 import org.thepacket.meshcore.protocol.RxLog
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 @Composable
 fun StatsContent(
@@ -72,11 +80,15 @@ fun StatsContent(
     ) {
         AddressBookCard(session)
         TrafficCard(session)
-        TelemetryCard(telemetry, onRefreshTelemetry)
-        NoiseCard(noiseHistory, radio?.noiseFloor)
+        SnrDistributionCard(session)
+        RssiDistributionCard(session)
+        HopCountDistributionCard(session)
+        TopRepeatersCard(session)
         radio?.let { RadioCard(it) }
         core?.let { CoreCard(it) }
         packets?.let { PacketsCard(it) }
+        TelemetryCard(telemetry, onRefreshTelemetry)
+        NoiseCard(noiseHistory, radio?.noiseFloor)
         if (radio == null && core == null) {
             Text("Reading stats…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
         }
@@ -411,6 +423,266 @@ private fun NoiseGraph(history: List<Int>, modifier: Modifier) {
         }
         drawPath(path, line, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f))
     }
+}
+
+/** SNR histogram over the RX history (higher = cleaner signal), green bars. */
+@Composable
+private fun SnrDistributionCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val stats = remember(history) { distStats(history.map { it.snrDb }) }
+    DistributionCard(
+        title = "SNR Distribution",
+        subtitle = "Signal-to-Noise Ratio (higher = cleaner signal)",
+        stats = stats,
+        barColor = MaterialTheme.colorScheme.secondary,
+        sdUnit = "dB",
+        fmt = { "%.1f dB".format(it) },
+    )
+}
+
+/** RSSI histogram over the RX history (closer to 0 = stronger), blue bars. */
+@Composable
+private fun RssiDistributionCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val stats = remember(history) { distStats(history.map { it.rssi.toDouble() }) }
+    DistributionCard(
+        title = "RSSI Distribution",
+        subtitle = "Received Signal Strength (closer to 0 = stronger)",
+        stats = stats,
+        barColor = Color(0xFF60A5FA),
+        sdUnit = "dBm",
+        fmt = { "%.0f dBm".format(it) },
+    )
+}
+
+/** Histogram of relay-hop counts per packet, with avg/median/max and a direct-packet count. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun HopCountDistributionCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val stats = remember(history) { hopStats(history) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Hop Count Distribution", style = MaterialTheme.typography.titleMedium)
+            Text("Number of repeater hops per packet",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (stats == null) {
+                Text("No packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            if (stats.counts.isNotEmpty()) {
+                DistributionHistogram(stats.counts, Color(0xFF60A5FA), Modifier.fillMaxWidth().height(140.dp))
+                // Integer hop-count axis: 1, midpoint, max.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    listOf(1, (1 + stats.maxHop) / 2, stats.maxHop).forEach {
+                        Text("$it", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                    }
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                StatInline("Avg", "%.1f hops".format(stats.mean))
+                StatInline("Median", "${stats.median}")
+                StatInline("Max", "${stats.maxHop}")
+                StatInline("1-hop direct", "${stats.direct}")
+            }
+        }
+    }
+}
+
+private class HopStats(
+    val counts: IntArray,   // index i => hop count (i + 1)
+    val maxHop: Int,
+    val mean: Double,
+    val median: Int,
+    val direct: Int,        // packets that reached us directly (no relay hops)
+)
+
+/** Per-packet relay-hop counts over the RX history; null when there are no packets. */
+private fun hopStats(history: List<RxLog>): HopStats? {
+    if (history.isEmpty()) return null
+    var direct = 0
+    val hops = ArrayList<Int>()
+    for (pkt in history) {
+        val p = PacketInspector.parse(pkt.raw)
+        if (p.payloadType == PayloadType.TRACE) continue // path field holds SNRs, not hop hashes
+        val n = p.pathHashes.size
+        if (n <= 0) direct++ else hops.add(n)
+    }
+    if (hops.isEmpty()) return HopStats(IntArray(0), 0, 0.0, 0, direct)
+    val maxHop = hops.max()
+    val counts = IntArray(maxHop)
+    hops.forEach { counts[it - 1]++ }
+    val sorted = hops.sorted()
+    return HopStats(counts, maxHop, hops.average(), sorted[sorted.size / 2], direct)
+}
+
+private data class RepeaterAgg(val label: String, val count: Int)
+
+/**
+ * Top nodes by how often they appear as a relay in packet paths (i.e. the busiest repeaters).
+ * Path hops are 1-byte routing identities, resolved to a name via an advert or the aggregate book.
+ */
+@Composable
+private fun TopRepeatersCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val contacts by session.allContacts.collectAsStateWithLifecycle()
+    val top = remember(history, contacts) {
+        val counts = HashMap<Int, Int>()
+        val advNames = HashMap<Int, String>() // best advert name seen for each routing byte
+        for (pkt in history) {
+            val p = PacketInspector.parse(pkt.raw)
+            p.advertName?.trim()?.takeIf { it.isNotBlank() }?.let { name ->
+                p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { advNames.putIfAbsent(it[0].toInt() and 0xFF, name) }
+            }
+            if (p.payloadType == PayloadType.TRACE) continue // path field holds SNRs, not hop hashes
+            p.pathHashes.forEach { h -> counts[h] = (counts[h] ?: 0) + 1 }
+        }
+        counts.entries.sortedByDescending { it.value }.take(16)
+            .map { RepeaterAgg(advNames[it.key] ?: talkerLabel(it.key, contacts), it.value) }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Top Repeaters", style = MaterialTheme.typography.titleMedium)
+            Text("Nodes appearing most in packet paths",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (top.isEmpty()) {
+                Text("No relayed packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            val maxCount = top.first().count
+            top.forEach { RepeaterRow(it.label, it.count, maxCount) }
+        }
+    }
+}
+
+/** A single ranked repeater: name, proportional bar, and path-appearance count. */
+@Composable
+private fun RepeaterRow(label: String, count: Int, maxCount: Int) {
+    val frac = if (maxCount > 0) count.toFloat() / maxCount else 0f
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.width(96.dp))
+        Box(
+            Modifier.weight(1f).height(18.dp).clip(RoundedCornerShape(4.dp))
+                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
+        ) {
+            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().clip(RoundedCornerShape(4.dp))
+                .background(Color(0xFF60A5FA)))
+        }
+        Text("%,d".format(count), style = MaterialTheme.typography.labelMedium,
+            fontFamily = FontFamily.Monospace, textAlign = TextAlign.End,
+            modifier = Modifier.width(48.dp))
+    }
+}
+
+/**
+ * A signal-quality histogram card: binned distribution over the persisted RX history, with the
+ * min/mean/median/max and standard deviation summarised below the bars. [fmt] renders the summary
+ * values (unit-aware); [sdUnit] is the unit appended to the standard deviation.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DistributionCard(
+    title: String,
+    subtitle: String,
+    stats: DistStats?,
+    barColor: androidx.compose.ui.graphics.Color,
+    sdUnit: String,
+    fmt: (Double) -> String,
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (stats == null) {
+                Text("No samples yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            Text("peak ${stats.counts.max()} / bin · ${stats.count} samples",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            DistributionHistogram(stats.counts, barColor, Modifier.fillMaxWidth().height(140.dp))
+            // Axis reference: low, midpoint, high edge of the binned range.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                listOf(stats.min, (stats.min + stats.max) / 2, stats.max).forEach {
+                    Text("%.1f".format(it), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                StatInline("Min", fmt(stats.min))
+                StatInline("Mean", fmt(stats.mean))
+                StatInline("Median", fmt(stats.median))
+                StatInline("Max", fmt(stats.max))
+                StatInline("σ", "%.1f %s".format(stats.sd, sdUnit))
+            }
+        }
+    }
+}
+
+/** Bar chart of per-bin counts (faint quartile grid lines). */
+@Composable
+private fun DistributionHistogram(
+    counts: IntArray,
+    barColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier,
+) {
+    val grid = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+    val maxC = (counts.maxOrNull() ?: 0).coerceAtLeast(1)
+    Canvas(modifier) {
+        listOf(0.25f, 0.5f, 0.75f, 1f).forEach { f ->
+            val gy = size.height * (1f - f)
+            drawLine(grid, Offset(0f, gy), Offset(size.width, gy), strokeWidth = 1f)
+        }
+        val slot = size.width / counts.size
+        counts.forEachIndexed { i, c ->
+            val bh = size.height * (c.toFloat() / maxC)
+            drawRect(barColor, topLeft = Offset(i * slot + slot * 0.1f, size.height - bh),
+                size = Size(slot * 0.8f, bh))
+        }
+    }
+}
+
+/** An inline "Label: value" pair for a distribution summary row. */
+@Composable
+private fun StatInline(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("$label: ", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+private class DistStats(
+    val count: Int,
+    val min: Double, val max: Double, val mean: Double, val median: Double, val sd: Double,
+    val counts: IntArray,
+)
+
+/** Compute a summary + a fixed-bin histogram over [values]; null when there are no samples. */
+private fun distStats(values: List<Double>, bins: Int = 21): DistStats? {
+    if (values.isEmpty()) return null
+    val min = values.min(); val max = values.max()
+    val mean = values.average()
+    val sorted = values.sorted()
+    val median = if (sorted.size % 2 == 1) sorted[sorted.size / 2]
+    else (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2
+    val sd = sqrt(values.sumOf { (it - mean) * (it - mean) } / values.size)
+    val counts = IntArray(bins)
+    val span = max - min
+    for (x in values) {
+        val idx = if (span <= 0.0) 0 else (((x - min) / span) * (bins - 1)).roundToInt().coerceIn(0, bins - 1)
+        counts[idx]++
+    }
+    return DistStats(values.size, min, max, mean, median, sd, counts)
 }
 
 @Composable
