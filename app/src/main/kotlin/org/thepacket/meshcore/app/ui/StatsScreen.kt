@@ -84,8 +84,8 @@ fun StatsContent(
         AddressBookCard(session)
         TrafficCard(session)
         MqttCard()
-        radio?.let { RadioCard(it) }
         core?.let { CoreCard(it) }
+        radio?.let { RadioCard(it) }
         NoiseCard(noiseHistory, radio?.noiseFloor)
         if (radio == null && core == null) {
             Text("Reading stats…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
