@@ -124,6 +124,7 @@ fun NodeDetailSheet(
                 heard?.snrDb?.let { kvRow("SNR", "$it dB") }
                 heard?.rssi?.let { kvRow("RSSI", "$it dBm") }
                 heard?.let { kvRow("Last heard", relAge(it.lastHeardMs)) }
+                contact?.region?.let { kvRow("Region", it) }
                 contact?.let { if (it.lastAdvert > 0) kvRow("Last advert", epochStr(it.lastAdvert)) }
                 contact?.let {
                     kvRow("Path", if (it.outPathLen in 0..63) "${it.outPathLen} hop(s)" else "flood / unknown")

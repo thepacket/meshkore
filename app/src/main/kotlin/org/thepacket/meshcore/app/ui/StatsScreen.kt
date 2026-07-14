@@ -737,8 +737,11 @@ internal class NodeResolver(history: List<RxLog>, val contacts: List<Contact>) {
         val r = regionOf(region)
         val a = adv[r to byte]
         val key = a?.first
+        // Fallback contact match is scoped to the same region so we never label a hop with a node from
+        // a different region that merely shares the 1-byte hash.
         val byByte = { t: Int? -> contacts.firstOrNull { c ->
-            c.publicKey.isNotEmpty() && (c.publicKey[0].toInt() and 0xFF) == byte && (t == null || c.type == t)
+            c.publicKey.isNotEmpty() && (c.publicKey[0].toInt() and 0xFF) == byte &&
+                (t == null || c.type == t) && regionOf(c.region) == r
         } }
         val contact = key?.let { k -> contacts.firstOrNull { it.publicKey.size >= 32 && it.publicKey.copyOf(32).contentEquals(k) } }
             ?: byByte(ContactType.REPEATER) ?: byByte(null)

@@ -359,6 +359,8 @@ class MeshSession(
     private fun injectAdvertToHeard(log: RxLog) {
         val p = PacketInspector.parse(log.raw)
         val key = p.advertPubKey ?: return
+        // Learn the node's region from where we observed it (the MQTT topic) — tags known contacts.
+        tagContactRegion(key, log.region)
         val hex = key.toHex()
         // Prefer the advert's own name; else a known contact's name; else the hex prefix (the
         // Heard UI re-resolves hex-only names against the aggregate book anyway).
@@ -888,11 +890,13 @@ class MeshSession(
             } else {
                 val cHasName = c.name.isNotBlank()
                 val exHasName = existing.name.isNotBlank()
-                val merged = when {
+                val picked = when {
                     cHasName && !exHasName -> c        // a name replaces a nameless entry
                     !cHasName && exHasName -> existing // never let a name regress to blank
                     else -> if (c.lastMod >= existing.lastMod) c else existing // both named/both blank
                 }
+                // Region, once known, never regresses to null (prefer the incoming, else keep existing).
+                val merged = picked.copy(region = c.region ?: existing.region)
                 if (!sameContactRecord(merged, existing)) {
                     byKey[k] = merged
                     changed = true
@@ -910,7 +914,20 @@ class MeshSession(
     private fun sameContactRecord(a: Contact, b: Contact): Boolean =
         a.name == b.name && a.type == b.type && a.lastMod == b.lastMod &&
             a.lastAdvert == b.lastAdvert && a.gpsLat == b.gpsLat && a.gpsLon == b.gpsLon &&
-            a.outPathLen == b.outPathLen
+            a.outPathLen == b.outPathLen && a.region == b.region
+
+    /**
+     * Tag a known contact with the region an advert was observed in (from the MQTT topic). Non-flooding:
+     * only writes when the region is newly known or changed, so a node's region is learned once and kept.
+     */
+    private fun tagContactRegion(key: ByteArray, region: String?) {
+        if (region.isNullOrBlank()) return
+        val existing = _allContacts.value.firstOrNull { it.publicKey.contentEquals(key) } ?: return
+        if (existing.region == region) return
+        _allContacts.update { list -> list.map { if (it.publicKey.contentEquals(key)) it.copy(region = region) else it } }
+        contactStore?.save(_allContacts.value)
+        _contacts.update { list -> list.map { if (it.publicKey.contentEquals(key)) it.copy(region = region) else it } }
+    }
 
     /**
      * Push the entire aggregate address book onto the connected device, skipping contacts the

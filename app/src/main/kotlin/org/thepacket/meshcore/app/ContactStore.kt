@@ -40,6 +40,7 @@ class ContactStore(private val file: File) {
                             gpsLat = o.optInt("gpsLat", 0),
                             gpsLon = o.optInt("gpsLon", 0),
                             lastMod = o.optLong("lastMod", 0),
+                            region = o.optString("region", "").ifBlank { null },
                         )
                     )
                 }
@@ -64,6 +65,7 @@ class ContactStore(private val file: File) {
                     put("gpsLat", c.gpsLat)
                     put("gpsLon", c.gpsLon)
                     put("lastMod", c.lastMod)
+                    c.region?.let { put("region", it) }
                 })
             }
             file.writeText(arr.toString())

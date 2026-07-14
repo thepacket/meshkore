@@ -140,6 +140,15 @@ private fun AllContactsList(
     var confirmSend by remember { mutableStateOf(false) }
     // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
     var typeFilter by remember { mutableStateOf(0) }
+    // Region filter (null = all). Regions are learned from observed adverts; untagged = home (Ottawa).
+    var regionFilter by remember { mutableStateOf<String?>(null) }
+    val regions = remember(allContacts) {
+        allContacts.map { NodeResolver.regionOf(it.region) }.distinct().sorted()
+    }
+    val regionScoped = remember(allContacts, regionFilter) {
+        if (regionFilter == null) allContacts
+        else allContacts.filter { NodeResolver.regionOf(it.region) == regionFilter }
+    }
 
     // Toast the outcome of a push once it completes.
     LaunchedEffect(session) {
@@ -156,15 +165,15 @@ private fun AllContactsList(
         allContacts.count { it.publicKey.toHex() !in onDeviceKeys }
     }
 
-    // Split the address book by type once, so each filter tab shows a live count.
-    val clients = remember(allContacts) {
-        allContacts.filter {
+    // Split the region-scoped address book by type once, so each filter tab shows a live count.
+    val clients = remember(regionScoped) {
+        regionScoped.filter {
             it.type != ContactType.REPEATER && it.type != ContactType.ROOM && it.type != ContactType.SENSOR
         }
     }
-    val repeaters = remember(allContacts) { allContacts.filter { it.type == ContactType.REPEATER } }
-    val rooms = remember(allContacts) { allContacts.filter { it.type == ContactType.ROOM } }
-    val sensors = remember(allContacts) { allContacts.filter { it.type == ContactType.SENSOR } }
+    val repeaters = remember(regionScoped) { regionScoped.filter { it.type == ContactType.REPEATER } }
+    val rooms = remember(regionScoped) { regionScoped.filter { it.type == ContactType.ROOM } }
+    val sensors = remember(regionScoped) { regionScoped.filter { it.type == ContactType.SENSOR } }
     val byType = when (typeFilter) {
         1 -> repeaters
         2 -> rooms
@@ -192,6 +201,9 @@ private fun AllContactsList(
                 Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text(if (missingCount > 0) "  Send $missingCount to device" else "  All on device")
             }
+        }
+        if (regions.size > 1) {
+            RegionFilterRow(regions = regions, selected = regionFilter, onSelect = { regionFilter = it })
         }
         TypeFilterRow(
             selected = typeFilter,
@@ -307,6 +319,21 @@ private fun TypeFilterRow(
             label = { Text("Room Servers ($roomCount)") })
         FilterChip(selected = selected == 3, onClick = { onSelect(3) },
             label = { Text("Sensors ($sensorCount)") })
+    }
+}
+
+/** Region filter chips ("All" + each learned region). Shown only when the book spans 2+ regions. */
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun RegionFilterRow(regions: List<String>, selected: String?, onSelect: (String?) -> Unit) {
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(selected = selected == null, onClick = { onSelect(null) }, label = { Text("All regions") })
+        regions.forEach { r ->
+            FilterChip(selected = selected == r, onClick = { onSelect(r) }, label = { Text(r) })
+        }
     }
 }
 
