@@ -102,7 +102,7 @@ class MeshSession(
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
         const val MAX_PACKETS = 5000 // cap the live packet feed (newest kept, earliest dropped)
-        const val MAX_PACKET_HISTORY = 2000 // cap the persisted analytics history
+        const val MAX_PACKET_HISTORY = 5000 // cap the persisted analytics history
         const val NOISE_HISTORY = 120 // noise-floor samples retained for the graph
         const val TAG = "MeshSession"
     }

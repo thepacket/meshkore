@@ -45,10 +45,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.MeshConnection
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.protocol.Contact
+import org.thepacket.meshcore.protocol.GroupCipher
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.LoRaAirtime
 import org.thepacket.meshcore.protocol.Lpp
@@ -87,6 +89,7 @@ fun StatsContent(
         RssiDistributionCard(session)
         HopCountDistributionCard(session)
         TopRepeatersCard(session)
+        TopSendersCard(session)
         radio?.let { RadioCard(it) }
         core?.let { CoreCard(it) }
         TelemetryCard(telemetry, onRefreshTelemetry)
@@ -578,15 +581,63 @@ private fun TopRepeatersCard(session: MeshSession) {
                 return@Column
             }
             val maxCount = top.first().count
-            top.forEach { RepeaterRow(it.label, it.count, maxCount) }
+            top.forEach { RankBarRow(it.label, "%,d".format(it.count), it.count.toFloat() / maxCount, Color(0xFF60A5FA)) }
         }
     }
 }
 
-/** A single ranked repeater: name, proportional bar, and path-appearance count. */
+/**
+ * Top nodes by number of channel messages sent, over the persisted RX history. The sender name is
+ * parsed from the decrypted GRP_TXT payload ("Sender: text"); undecryptable posts count as Anonymous.
+ */
 @Composable
-private fun RepeaterRow(label: String, count: Int, maxCount: Int) {
-    val frac = if (maxCount > 0) count.toFloat() / maxCount else 0f
+private fun TopSendersCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val channels by session.channels.collectAsStateWithLifecycle()
+    val top = remember(history, channels) {
+        val counts = HashMap<String, Int>()
+        for (pkt in history) {
+            val p = PacketInspector.parse(pkt.raw)
+            if (p.payloadType != PayloadType.GRP_TXT) continue
+            val name = channelSender(p, channels)
+            counts[name] = (counts[name] ?: 0) + 1
+        }
+        counts.entries.sortedByDescending { it.value }.take(10).map { RepeaterAgg(it.key, it.value) }
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Top Senders", style = MaterialTheme.typography.titleMedium)
+            Text("Channel messages by sender",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (top.isEmpty()) {
+                Text("No channel messages yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            val maxCount = top.first().count
+            top.forEach { RankBarRow(it.label, "${it.count} msgs", it.count.toFloat() / maxCount, Color(0xFF8B5CF6)) }
+        }
+    }
+}
+
+/** Sender name of a GRP_TXT packet from its decrypted "Sender: text" body, or "Anonymous". */
+private fun channelSender(p: ParsedPacket, channels: List<ChannelEntry>): String {
+    val hash = p.channelHash ?: return "Anonymous"
+    if (p.payload.size < 2) return "Anonymous"
+    val body = p.payload.copyOfRange(1, p.payload.size) // after the channel-hash byte
+    for (ch in channels.filter { it.secret.isNotEmpty() && GroupCipher.channelHash(it.secret) == hash }) {
+        val plain = GroupCipher.decrypt(ch.secret, body) ?: continue
+        val text = GroupCipher.parseGroupText(plain)?.text ?: continue
+        val name = text.substringBefore(": ", "").trim()
+        return name.ifEmpty { "Anonymous" }
+    }
+    return "Anonymous" // not our channel (no key) or MAC/parse failed
+}
+
+/** A single ranked bar row: name, proportional bar, and a value label. */
+@Composable
+private fun RankBarRow(label: String, valueText: String, frac: Float, barColor: Color) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1,
@@ -596,11 +647,11 @@ private fun RepeaterRow(label: String, count: Int, maxCount: Int) {
                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
         ) {
             Box(Modifier.fillMaxWidth(frac).fillMaxHeight().clip(RoundedCornerShape(4.dp))
-                .background(Color(0xFF60A5FA)))
+                .background(barColor))
         }
-        Text("%,d".format(count), style = MaterialTheme.typography.labelMedium,
+        Text(valueText, style = MaterialTheme.typography.labelMedium,
             fontFamily = FontFamily.Monospace, textAlign = TextAlign.End,
-            modifier = Modifier.width(48.dp))
+            modifier = Modifier.width(72.dp))
     }
 }
 
