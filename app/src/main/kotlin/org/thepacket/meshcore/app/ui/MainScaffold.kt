@@ -95,10 +95,10 @@ fun MainScaffold(
                     label = { Text("Packets") },
                 )
                 NavigationBarItem(
-                    selected = tab == MainTab.Stats,
-                    onClick = { onTab(MainTab.Stats) },
-                    icon = { Icon(Icons.Default.BarChart, contentDescription = null) },
-                    label = { Text("Stats") },
+                    selected = tab == MainTab.Tools,
+                    onClick = { onTab(MainTab.Tools) },
+                    icon = { Icon(Icons.Default.Build, contentDescription = null) },
+                    label = { Text("Tools") },
                 )
                 NavigationBarItem(
                     selected = tab == MainTab.Map,
@@ -107,10 +107,10 @@ fun MainScaffold(
                     label = { Text("Map") },
                 )
                 NavigationBarItem(
-                    selected = tab == MainTab.Tools,
-                    onClick = { onTab(MainTab.Tools) },
-                    icon = { Icon(Icons.Default.Build, contentDescription = null) },
-                    label = { Text("Tools") },
+                    selected = tab == MainTab.Stats,
+                    onClick = { onTab(MainTab.Stats) },
+                    icon = { Icon(Icons.Default.BarChart, contentDescription = null) },
+                    label = { Text("Stats") },
                 )
                 NavigationBarItem(
                     selected = tab == MainTab.Settings,
