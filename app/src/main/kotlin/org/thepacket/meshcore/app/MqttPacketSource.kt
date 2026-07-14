@@ -35,6 +35,16 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     private val _received = MutableStateFlow(0L)
     val received: StateFlow<Long> = _received.asStateFlow()
 
+    /** Packet counts attributed to each broker (index aligns with the broker list). */
+    private val _fromBroker = MutableStateFlow<List<Long>>(emptyList())
+    val fromBroker: StateFlow<List<Long>> = _fromBroker.asStateFlow()
+    /** Non-user disconnects (network drops / errors) seen this session. */
+    private val _disconnections = MutableStateFlow(0L)
+    val disconnections: StateFlow<Long> = _disconnections.asStateFlow()
+    /** Times the feed failed over from one broker to another. */
+    private val _brokerChanges = MutableStateFlow(0L)
+    val brokerChanges: StateFlow<Long> = _brokerChanges.asStateFlow()
+
     @Volatile private var client: Mqtt3AsyncClient? = null
 
     private data class Broker(val host: String, val port: Int, val path: String)
@@ -62,6 +72,8 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
             brokers = urls.map(::parseBroker)
             if (brokers.isEmpty()) error("no broker")
             activeIndex = startIndex.coerceIn(brokers.indices)
+            // Keep accumulated per-broker counts across reconnects; (re)size if the broker list changed.
+            if (_fromBroker.value.size != brokers.size) _fromBroker.value = List(brokers.size) { 0L }
             val b = brokers[activeIndex]
             Log.d(TAG, "connecting host=${b.host} port=${b.port} path=/${b.path} topic=$topic auth=${username.isNotBlank()}")
 
@@ -98,6 +110,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     private fun onDisconnected(ctx: MqttClientDisconnectedContext) {
         // We disconnected on purpose (stop()) — stay down, don't reconnect.
         if (ctx.source == MqttDisconnectSource.USER) return
+        _disconnections.value++
         val msg = ctx.cause.message ?: "disconnected"
         Log.w(TAG, "disconnected (${ctx.source}): $msg")
         if (msg.contains("NOT_AUTHORIZED", ignoreCase = true) ||
@@ -115,6 +128,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
         val recon = ctx.reconnector.reconnect(true).delay(RECONNECT_DELAY_MS, TimeUnit.MILLISECONDS)
         if (brokers.size > 1) {
             activeIndex = (activeIndex + 1) % brokers.size
+            _brokerChanges.value++
             val next = brokers[activeIndex]
             Log.w(TAG, "failing over to ${next.host}:${next.port}")
             // Reuse the current transport (TLS + WebSocket path), only moving host/port.
@@ -136,6 +150,10 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
                 if (_received.value == 0L) Log.d(TAG, "first packet injected: ${log.raw.size}B")
                 onPacket(log)
                 _received.value++
+                // Attribute to the broker currently serving the feed.
+                val idx = activeIndex
+                _fromBroker.value = _fromBroker.value.toMutableList()
+                    .also { if (idx in it.indices) it[idx] = it[idx] + 1 }
             }
             .send()
             .whenComplete { _: Mqtt3SubAck?, ex: Throwable? ->

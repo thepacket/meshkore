@@ -45,7 +45,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.thepacket.meshcore.app.MeshConnection
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.LoRaAirtime
@@ -79,6 +81,7 @@ fun StatsContent(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         AddressBookCard(session)
+        MqttCard()
         TrafficCard(session)
         SnrDistributionCard(session)
         RssiDistributionCard(session)
@@ -114,6 +117,27 @@ private fun AddressBookCard(session: MeshSession) {
                 "Device channels",
                 if (maxChannels != null) "${channels.size} / $maxChannels" else "${channels.size}",
             )
+        }
+    }
+}
+
+/** Live MQTT feed counters: per-broker + total packets, disconnects, and broker failovers. */
+@Composable
+private fun MqttCard() {
+    val fromBroker by MeshConnection.mqtt.fromBroker.collectAsStateWithLifecycle()
+    val total by MeshConnection.mqtt.received.collectAsStateWithLifecycle()
+    val disconnections by MeshConnection.mqtt.disconnections.collectAsStateWithLifecycle()
+    val brokerChanges by MeshConnection.mqtt.brokerChanges.collectAsStateWithLifecycle()
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("MQTT", style = MaterialTheme.typography.titleMedium)
+            MqttPrefs.BROKERS.forEachIndexed { i, (_, url) ->
+                val host = runCatching { java.net.URI(url).host }.getOrNull() ?: url
+                StatRow("Packets from ${host.substringBefore('.')}", "${fromBroker.getOrElse(i) { 0L }}")
+            }
+            StatRow("Total packets", "$total")
+            StatRow("Disconnections", "$disconnections")
+            StatRow("Broker change", "$brokerChanges")
         }
     }
 }
