@@ -183,7 +183,7 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             Text("No device connected — connect one for full settings. The region, MQTT feed, and " +
                 "global address book work without a device:", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall)
-            RegionCard(ctx)
+            RegionCard(ctx, session)
             SectionCard("Global Contacts") {
                 ToolButton("Export all") { exportGlobalContacts.launch("meshcore-global-contacts.json") }
                 ToolButton("Import all") { importGlobalContacts.launch(arrayOf("application/json")) }
@@ -203,7 +203,7 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         // ---- Region (global: MQTT subscription + device push scope) ----
-        RegionCard(ctx)
+        RegionCard(ctx, session)
 
         // ---- Global Contacts (the aggregate address book) ----
         SectionCard("Global Contacts") {
@@ -675,16 +675,16 @@ private fun ImportPrivateKeyDialog(onDismiss: () -> Unit, onImport: (ByteArray) 
     )
 }
 
-/** Global mesh region — drives the meshcore.ca MQTT subscription topic and the device push scope. */
+/** Global mesh region — drives the MQTT subscription, the device push scope, and the shown packet feed. */
 @Composable
-private fun RegionCard(ctx: Context) {
+private fun RegionCard(ctx: Context, session: MeshSession) {
     val prefs = remember { MqttPrefs(ctx) }
     var region by remember { mutableStateOf(prefs.region) }
     val regions = MqttPrefs.REGIONS
     SectionCard("Region") {
         Text(
-            "Your mesh region. Sets the meshcore.ca MQTT subscription, and scopes which contacts are " +
-                "pushed to a connected device (a companion only wants nodes in its own region).",
+            "Your mesh region. Sets the meshcore.ca MQTT subscription, scopes which contacts are pushed " +
+                "to a connected device, and selects which per-region packet feed the monitor shows.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
@@ -692,6 +692,7 @@ private fun RegionCard(ctx: Context) {
             regions.indexOfFirst { it.second == region }.coerceAtLeast(0)) { i ->
             region = regions[i].second
             prefs.region = region
+            session.setRegion(region) // switch the shown per-region feed + push scope
             if (prefs.enabled) MeshConnection.setMqttEnabled(ctx, true) // reconnect to the new topic
         }
     }
