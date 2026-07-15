@@ -173,7 +173,11 @@ class MeshSession(
     /** The app's currently-selected region (drives which per-region feed the monitor shows). */
     private val _region = MutableStateFlow(initialRegion)
     val region: StateFlow<String> = _region.asStateFlow()
-    fun setRegion(r: String) { _region.value = r }
+    fun setRegion(r: String) {
+        if (_region.value == r) return
+        _region.value = r
+        _heard.value = emptyList() // Heard is region-mixed; clear it so it repopulates for the new region
+    }
 
     private fun addToRegionFeed(log: RxLog) {
         val r = log.region ?: MqttPrefs.DEFAULT_REGION
