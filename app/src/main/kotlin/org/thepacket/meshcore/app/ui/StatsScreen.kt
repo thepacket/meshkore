@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.MeshConnection
+import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.protocol.Contact
@@ -946,6 +947,73 @@ internal fun RepeaterPairHeatmapCard(
             onDismiss = { selected = null },
             onShowOnMap = { lat, lon -> selected = null; onShowOnMap(lat, lon) },
         )
+    }
+}
+
+/** Geographic distance (km) between consecutive positioned nodes in each packet's path. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun HopDistanceCard(session: MeshSession) {
+    val history by session.packetHistory.collectAsStateWithLifecycle()
+    val contacts by session.allContacts.collectAsStateWithLifecycle()
+    val self by session.self.collectAsStateWithLifecycle()
+    val stats = remember(history, contacts, self) {
+        // Region-scoped position index: (region, 1-byte id) -> GPS. O(1) per hop, and a hop only matches
+        // a contact tagged with the packet's region — so a same-hash node elsewhere isn't used.
+        val posBy = HashMap<Pair<String, Int>, Pair<Double, Double>>()
+        for (c in contacts) {
+            val la = c.latDegrees ?: continue; val lo = c.lonDegrees ?: continue
+            posBy.putIfAbsent(NodeResolver.regionOf(c.region) to (c.publicKey[0].toInt() and 0xFF), la to lo)
+        }
+        val selfPos = self?.let { if (it.advLat != 0 || it.advLon != 0) (it.advLat / 1e6) to (it.advLon / 1e6) else null }
+        val dists = ArrayList<Double>()
+        for (pkt in history) {
+            val p = PacketInspector.parse(pkt.raw)
+            if (p.payloadType == PayloadType.TRACE || p.pathHashes.isEmpty()) continue
+            val r = NodeResolver.regionOf(pkt.region)
+            // Chain: source → relays → this node; distance each leg where both ends are positioned.
+            val chain = ArrayList<Pair<Double, Double>?>()
+            val lat = p.advertLat; val lon = p.advertLon
+            chain.add(
+                if (lat != null && lon != null && (lat != 0 || lon != 0)) (lat / 1e6) to (lon / 1e6)
+                else p.srcHash?.let { posBy[r to it] }
+            )
+            p.pathHashes.forEach { chain.add(posBy[r to it]) }
+            chain.add(selfPos)
+            for (i in 0 until chain.size - 1) {
+                val a = chain[i]; val b = chain[i + 1]
+                if (a != null && b != null) dists.add(haversineKm(a.first, a.second, b.first, b.second))
+            }
+        }
+        distStats(dists)
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Hop Distance Distribution", style = MaterialTheme.typography.titleMedium)
+            Text("Geographic distance between consecutive path hops (km)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (stats == null) {
+                Text("No positioned hops yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            Text("peak ${stats.counts.max()} / bin · ${stats.count} legs",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            DistributionHistogram(stats.counts, Color(0xFF4ADE80), Modifier.fillMaxWidth().height(140.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                listOf(stats.min, (stats.min + stats.max) / 2, stats.max).forEach {
+                    Text("%.1f".format(it), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                StatInline("Min", "%.1f km".format(stats.min))
+                StatInline("Avg", "%.1f km".format(stats.mean))
+                StatInline("Max", "%.1f km".format(stats.max))
+            }
+        }
     }
 }
 

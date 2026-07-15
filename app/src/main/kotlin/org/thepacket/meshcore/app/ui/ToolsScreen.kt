@@ -117,6 +117,7 @@ fun ToolsContent(
             "sigquality" -> AnalyticsTool("Signal Quality", { open = null }) { SignalQualityCard(session) }
             "scatter" -> AnalyticsTool("SNR vs RSSI", { open = null }) { SnrRssiScatterCard(session) }
             "hops" -> AnalyticsTool("Hop Count", { open = null }) { HopCountDistributionCard(session) }
+            "hopdist" -> AnalyticsTool("Hop Distance", { open = null }) { HopDistanceCard(session) }
             "size" -> AnalyticsTool("Packet Size", { open = null }) { PacketSizeCard(session) }
             "repeaters" -> AnalyticsTool("Top Repeaters", { open = null }) { TopRepeatersCard(session) }
             "pairs" -> AnalyticsTool("Repeater Pairs", { open = null }) { RepeaterPairHeatmapCard(session, onShowOnMap) }
@@ -177,6 +178,8 @@ fun ToolsContent(
                     "Scatter of every packet by SNR and RSSI, over link-quality zones.") { open = "scatter" }
                 ToolRow(Icons.Default.Timeline, "Hop Count",
                     "Distribution of relay-hop counts per packet.") { open = "hops" }
+                ToolRow(Icons.Default.Straighten, "Hop Distance",
+                    "Geographic distance between consecutive path hops.") { open = "hopdist" }
                 ToolRow(Icons.Default.Straighten, "Packet Size",
                     "Distribution of raw packet length in bytes.") { open = "size" }
                 ToolRow(Icons.Default.Hub, "Top Repeaters",
