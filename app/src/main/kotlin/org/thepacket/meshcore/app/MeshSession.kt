@@ -109,7 +109,7 @@ class MeshSession(
 ) {
     private companion object {
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
-        const val MAX_PACKETS = 5000 // cap the live packet feed (newest kept, earliest dropped)
+        const val MAX_PACKETS = 5000 // cap the received raw-data frame list (newest kept, earliest dropped)
         const val MAX_PACKET_HISTORY = 5000 // cap the persisted analytics history
         const val NOISE_HISTORY = 120 // noise-floor samples retained for the graph
         const val TAG = "MeshSession"
@@ -200,14 +200,6 @@ class MeshSession(
     }
 
     // ---- instrumentation (P2) ----
-    /**
-     * Live raw-packet feed, kept as **N independent per-region feeds** (keyed by region, region-less/BLE
-     * bucketed under the home default). Each region is newest-first and capped, so a busy region can't
-     * evict a quiet one; the packet monitor shows the feed for the currently-selected [region].
-     */
-    private val _packetsByRegion = MutableStateFlow<Map<String, List<RxLog>>>(emptyMap())
-    val packetsByRegion: StateFlow<Map<String, List<RxLog>>> = _packetsByRegion.asStateFlow()
-
     /** The app's currently-selected region (drives which per-region feed the monitor shows). */
     private val _region = MutableStateFlow(initialRegion)
     val region: StateFlow<String> = _region.asStateFlow()
@@ -232,7 +224,6 @@ class MeshSession(
     fun setHomeRegion(h: String?) {
         if (_homeRegion.value == h) return
         _homeRegion.value = h
-        _packetsByRegion.update { m -> m.regroupBy(h, MAX_PACKETS) }
         _historyByRegion.update { m -> m.regroupBy(h, MAX_PACKET_HISTORY) }
         _heard.value = emptyList()
     }
@@ -241,20 +232,13 @@ class MeshSession(
         values.flatten().groupBy { regionOf(it.region, home) }
             .mapValues { (_, v) -> v.sortedByDescending { it.receivedAtMs }.take(cap) }
 
-    private fun addToRegionFeed(log: RxLog) {
-        val r = regionOf(log.region, _homeRegion.value)
-        _packetsByRegion.update { m -> m + (r to (listOf(log) + (m[r] ?: emptyList())).take(MAX_PACKETS)) }
-    }
-
     /**
-     * Persisted RX packet history for analytics (newest first, capped), spanning sessions —
-     * unlike [packets] it is NOT cleared on disconnect and is restored on app start.
-     */
-    /**
-     * Persisted analytics history, kept as **N per-region lists** (each capped) — parallel to the
-     * per-region live feeds. [packetHistory] exposes the *currently-selected* region's history, so every
-     * analytics tool scopes to that region automatically and stays bounded no matter how many regions
-     * are observed.
+     * The collected RX packets, kept as **N per-region lists** (newest first, each capped) so a busy
+     * region can't evict a quiet one. Persisted and restored on app start, and NOT cleared on
+     * disconnect: the companion is only one of the sources, and the MQTT feed keeps collecting without it.
+     *
+     * [packetHistory] exposes the *currently-selected* region's packets, so the monitor and every
+     * analytics tool scope to that region automatically and stay bounded however many regions are observed.
      */
     private val _historyByRegion = MutableStateFlow<Map<String, List<RxLog>>>(emptyMap())
     val packetHistory: StateFlow<List<RxLog>> =
@@ -436,11 +420,10 @@ class MeshSession(
         startStatsPolling()
     }
 
-    /** Clear the traffic analytics: the persisted packet history + the live RX feed. */
+    /** Clear the collected RX packets — the monitor feed and the traffic analytics are the same store. */
     fun clearPacketHistory() {
         packetSaveJob?.cancel(); packetSaveJob = null
         _historyByRegion.value = emptyMap()
-        _packetsByRegion.value = emptyMap()
         packetStore?.save(emptyList())
     }
 
@@ -453,7 +436,6 @@ class MeshSession(
      * or without a BLE link (the session outlives any single connection).
      */
     fun injectPacket(log: RxLog) {
-        addToRegionFeed(log)
         addToHistory(log)
         schedulePacketSave()
         // An observed ADVERT is a station heard on the air — create/refresh a regional contact and
@@ -834,8 +816,9 @@ class MeshSession(
         _contacts.value = emptyList()
         _channels.value = emptyList()
         // NB: _messages is intentionally NOT cleared — chat history persists across disconnects.
-        _packetsByRegion.value = emptyMap()
-        // _packetHistory persists across disconnects — flush it now so the latest survives.
+        // Nor are the collected packets: the companion is one source among several, and dropping them
+        // here would throw away everything the MQTT feed has gathered (it keeps running without BLE).
+        // Flush now so the latest survives.
         packetSaveJob?.cancel(); packetSaveJob = null
         packetStore?.save(_historyByRegion.value.values.flatten())
         _radioStats.value = null
@@ -1003,14 +986,13 @@ class MeshSession(
 
     fun factoryReset() = scope.launch { runCatching { link.send(Requests.factoryReset()) } }.let {}
 
-    /** Clear local app data (chat history, heard list, packet feed + history). Contacts re-sync on connect. */
+    /** Clear local app data (chat history, heard list, collected packets). Contacts re-sync on connect. */
     fun purgeLocalData() {
         _messages.value = emptyMap()
         _unread.value = emptyMap()
         chatStore?.save(emptyMap())
         chatStore?.saveUnread(emptyMap())
         _heard.value = emptyList()
-        _packetsByRegion.value = emptyMap()
         _historyByRegion.value = emptyMap()
         packetSaveJob?.cancel(); packetSaveJob = null
         packetStore?.save(emptyList())
@@ -1618,7 +1600,6 @@ class MeshSession(
             is Incoming.SendConfirmed -> markDelivered(f.ackId, f.roundTripMs)
 
             is Incoming.RxPacket -> {
-                addToRegionFeed(f.log)
                 addToHistory(f.log)
                 schedulePacketSave()
                 // Remember the signal of the latest advert packet to attach to the advert push, and

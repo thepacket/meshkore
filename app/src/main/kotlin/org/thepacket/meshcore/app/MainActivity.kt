@@ -81,10 +81,10 @@ class MainActivity : ComponentActivity() {
             val contacts by vm.session.contacts.collectAsStateWithLifecycle()
             val allContacts by vm.session.allContacts.collectAsStateWithLifecycle()
             val messages by vm.session.messages.collectAsStateWithLifecycle()
-            // The packet monitor shows the currently-selected region's feed (one of N per-region feeds).
-            val packetsByRegion by vm.session.packetsByRegion.collectAsStateWithLifecycle()
+            // The packet monitor shows the currently-selected region's collected packets — the same
+            // persisted store the analytics read, so it survives restarts and BLE drops.
+            val packets by vm.session.packetHistory.collectAsStateWithLifecycle()
             val region by vm.session.region.collectAsStateWithLifecycle()
-            val packets = packetsByRegion[region].orEmpty()
             val heard by vm.session.heard.collectAsStateWithLifecycle()
             val radio by vm.session.radioStats.collectAsStateWithLifecycle()
             val core by vm.session.coreStats.collectAsStateWithLifecycle()
