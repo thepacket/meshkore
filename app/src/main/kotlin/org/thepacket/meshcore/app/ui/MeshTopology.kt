@@ -86,6 +86,7 @@ fun buildTopology(
     contacts: List<Contact>,
     nameBook: List<Contact>,
     packets: List<RxLog>,
+    home: String?,
     edgeLimit: Int = 500,
 ): Topology {
     val selfId = "self"
@@ -93,8 +94,8 @@ fun buildTopology(
 
     // Region-aware resolver: adverts carry the full key, so a hop resolves to an exact node within its
     // region, disambiguating the 1-byte hashes that collide across the multi-region book. Contacts and
-    // BLE packets (no region) are assumed Ottawa (see NodeResolver.regionOf).
-    val resolver = NodeResolver(packets, nameBook)
+    // companion-heard packets carry no region and resolve to [home].
+    val resolver = NodeResolver(packets, nameBook, home)
 
     // Observed packet relay chains, tagged with the packet's region (source → relays → us).
     val chains = ArrayList<Pair<String?, List<Int>>>()
@@ -197,7 +198,8 @@ fun MeshTopologyScreen(
         (h * 31 + allContacts.size) * 31 + packets.size / 15
     }
     // Names resolve from the aggregate book + the whole persisted history; edges from the recent slice.
-    val topo = remember(sig) { buildTopology(self, contacts, allContacts, packets) }
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val topo = remember(sig, home) { buildTopology(self, contacts, allContacts, packets, home) }
 
     val cs = MaterialTheme.colorScheme
     fun colorFor(kind: TopoKind): Color = when (kind) {

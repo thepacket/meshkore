@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
             val state by vm.ui.collectAsStateWithLifecycle()
             val self by vm.session.self.collectAsStateWithLifecycle()
             val channels by vm.session.channels.collectAsStateWithLifecycle()
+            val observedChannels by vm.session.observedChannels.collectAsStateWithLifecycle()
             val contacts by vm.session.contacts.collectAsStateWithLifecycle()
             val allContacts by vm.session.allContacts.collectAsStateWithLifecycle()
             val messages by vm.session.messages.collectAsStateWithLifecycle()
@@ -154,6 +155,10 @@ class MainActivity : ComponentActivity() {
                                 repeaters[screen.conversationId]?.login ?: RepeaterLogin.None
                             },
                             isChannel = screen.conversationId.startsWith("ch:"),
+                            // Ask the list rather than parsing the id: it's an observed channel exactly
+                            // when it's one we follow. (sendMessage already no-ops on these ids, but a
+                            // composer that silently does nothing is worse than no composer.)
+                            readOnly = observedChannels.any { it.conversationId == screen.conversationId },
                             onBack = vm::backToHome,
                             onSend = { text -> vm.sendMessage(screen.conversationId, text) },
                             onLogin = { pw -> roomContact?.let { vm.session.loginRepeater(it, pw) } },

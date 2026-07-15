@@ -59,7 +59,8 @@ object MeshConnection {
         scanner = CompanionScanner(app)
         link = NordicMeshCoreLink(app)
         session = MeshSession(link, scope, ChatStore(app), AdminPrefs(app), ContactStore(app), PacketStore(app), ContactPrefs(app),
-            initialRegion = MqttPrefs(app).region)
+            ObservedChannelStore(app),
+            initialRegion = MqttPrefs(app).region, initialHomeRegion = MqttPrefs(app).homeRegion)
         mqtt = MqttPacketSource(session::injectPacket)
         MqttPrefs(app).let { if (it.enabled) mqtt.start(it.brokerUrls, it.topic, it.username, it.password, it.broker) }
         initialized = true

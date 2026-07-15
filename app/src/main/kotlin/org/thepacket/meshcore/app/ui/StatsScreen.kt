@@ -52,6 +52,7 @@ import org.thepacket.meshcore.app.MeshConnection
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.MqttPrefs
+import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.GroupCipher
@@ -233,8 +234,9 @@ internal fun TopTalkersCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
     val contacts by session.allContacts.collectAsStateWithLifecycle()
-    val talkers = remember(history, contacts, self) {
-        val resolver = NodeResolver(history, contacts)
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val talkers = remember(history, contacts, self, home) {
+        val resolver = NodeResolver(history, contacts, home)
         val agg = HashMap<String, DoubleArray>() // node id -> [count, airtimeMs]
         val info = HashMap<String, ResolvedNode>()
         history.forEach { pkt ->
@@ -723,26 +725,26 @@ internal class ResolvedNode(val id: String, val label: String, val contact: Cont
  * byte, then to the raw hash. Identity is the full-key prefix when known (so a node dedupes across
  * regions), else "region:byte" (so the same byte in different regions is counted separately).
  */
-internal class NodeResolver(history: List<RxLog>, val contacts: List<Contact>) {
+internal class NodeResolver(history: List<RxLog>, val contacts: List<Contact>, private val home: String?) {
     private val adv = HashMap<Pair<String, Int>, Pair<ByteArray, String?>>() // (region, byte) -> (key, name)
     init {
         for (pkt in history) {
             val p = PacketInspector.parse(pkt.raw)
             val key = p.advertPubKey?.takeIf { it.size >= 32 } ?: continue
-            adv.putIfAbsent(regionOf(pkt.region) to (key[0].toInt() and 0xFF),
+            adv.putIfAbsent(regionOf(pkt.region, home) to (key[0].toInt() and 0xFF),
                 key.copyOf(32) to p.advertName?.trim()?.takeIf { it.isNotBlank() })
         }
     }
 
     fun resolve(region: String?, byte: Int): ResolvedNode {
-        val r = regionOf(region)
+        val r = regionOf(region, home)
         val a = adv[r to byte]
         val key = a?.first
         // Fallback contact match is scoped to the same region so we never label a hop with a node from
         // a different region that merely shares the 1-byte hash.
         val byByte = { t: Int? -> contacts.firstOrNull { c ->
             c.publicKey.isNotEmpty() && (c.publicKey[0].toInt() and 0xFF) == byte &&
-                (t == null || c.type == t) && regionOf(c.region) == r
+                (t == null || c.type == t) && regionOf(c.region, home) == r
         } }
         val contact = key?.let { k -> contacts.firstOrNull { it.publicKey.size >= 32 && it.publicKey.copyOf(32).contentEquals(k) } }
             ?: byByte(ContactType.REPEATER) ?: byByte(null)
@@ -751,10 +753,6 @@ internal class NodeResolver(history: List<RxLog>, val contacts: List<Contact>) {
         return ResolvedNode(id, label, contact)
     }
 
-    companion object {
-        /** Region-less packets/contacts (BLE, or history from before region tagging) are assumed Ottawa. */
-        fun regionOf(region: String?): String = region ?: "YOW"
-    }
 }
 
 /**
@@ -765,8 +763,9 @@ internal class NodeResolver(history: List<RxLog>, val contacts: List<Contact>) {
 internal fun TopRepeatersCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val contacts by session.allContacts.collectAsStateWithLifecycle()
-    val top = remember(history, contacts) {
-        val resolver = NodeResolver(history, contacts)
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val top = remember(history, contacts, home) {
+        val resolver = NodeResolver(history, contacts, home)
         val counts = HashMap<String, Int>()
         val info = HashMap<String, ResolvedNode>()
         for (pkt in history) {
@@ -880,8 +879,9 @@ internal fun RepeaterPairHeatmapCard(
     val self by session.self.collectAsStateWithLifecycle()
     val heard by session.heard.collectAsStateWithLifecycle()
     var selected by remember { mutableStateOf<ResolvedNode?>(null) } // tapped node
-    val pairs = remember(history, contacts) {
-        val resolver = NodeResolver(history, contacts)
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val pairs = remember(history, contacts, home) {
+        val resolver = NodeResolver(history, contacts, home)
         val counts = HashMap<Pair<String, String>, Int>()
         val info = HashMap<String, ResolvedNode>()
         for (pkt in history) {
@@ -957,20 +957,21 @@ internal fun HopDistanceCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
     val contacts by session.allContacts.collectAsStateWithLifecycle()
     val self by session.self.collectAsStateWithLifecycle()
-    val stats = remember(history, contacts, self) {
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val stats = remember(history, contacts, self, home) {
         // Region-scoped position index: (region, 1-byte id) -> GPS. O(1) per hop, and a hop only matches
         // a contact tagged with the packet's region — so a same-hash node elsewhere isn't used.
         val posBy = HashMap<Pair<String, Int>, Pair<Double, Double>>()
         for (c in contacts) {
             val la = c.latDegrees ?: continue; val lo = c.lonDegrees ?: continue
-            posBy.putIfAbsent(NodeResolver.regionOf(c.region) to (c.publicKey[0].toInt() and 0xFF), la to lo)
+            posBy.putIfAbsent(regionOf(c.region, home) to (c.publicKey[0].toInt() and 0xFF), la to lo)
         }
         val selfPos = self?.let { if (it.advLat != 0 || it.advLon != 0) (it.advLat / 1e6) to (it.advLon / 1e6) else null }
         val dists = ArrayList<Double>()
         for (pkt in history) {
             val p = PacketInspector.parse(pkt.raw)
             if (p.payloadType == PayloadType.TRACE || p.pathHashes.isEmpty()) continue
-            val r = NodeResolver.regionOf(pkt.region)
+            val r = regionOf(pkt.region, home)
             // Chain: source → relays → this node; distance each leg where both ends are positioned.
             val chain = ArrayList<Pair<Double, Double>?>()
             val lat = p.advertLat; val lon = p.advertLon
@@ -1040,7 +1041,7 @@ private class HashSizeStats(
     val totalUnique: Int, val uniqueBySize: Map<Int, Int>,
 )
 
-private fun hashSizeStats(history: List<RxLog>): HashSizeStats {
+private fun hashSizeStats(history: List<RxLog>, home: String?): HashSizeStats {
     var packetsWithHops = 0
     val bySize = HashMap<Int, Int>()
     val uniq = HashMap<Int, HashSet<String>>()
@@ -1049,7 +1050,7 @@ private fun hashSizeStats(history: List<RxLog>): HashSizeStats {
         packetsWithHops++
         bySize[size] = (bySize[size] ?: 0) + 1
         // Region-scope uniqueness: the same hop hash in two regions is two distinct repeaters.
-        val region = NodeResolver.regionOf(pkt.region)
+        val region = regionOf(pkt.region, home)
         uniq.getOrPut(size) { HashSet() }.addAll(hops.map { "$region:$it" })
     }
     return HashSizeStats(packetsWithHops, bySize, uniq.values.sumOf { it.size }, uniq.mapValues { it.value.size })
@@ -1059,7 +1060,8 @@ private fun hashSizeStats(history: List<RxLog>): HashSizeStats {
 @Composable
 internal fun HashSizeCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
-    val s = remember(history) { hashSizeStats(history) }
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val s = remember(history, home) { hashSizeStats(history, home) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Hash Size Distribution", style = MaterialTheme.typography.titleMedium)

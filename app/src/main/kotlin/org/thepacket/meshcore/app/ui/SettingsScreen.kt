@@ -680,6 +680,7 @@ private fun ImportPrivateKeyDialog(onDismiss: () -> Unit, onImport: (ByteArray) 
 private fun RegionCard(ctx: Context, session: MeshSession) {
     val prefs = remember { MqttPrefs(ctx) }
     var region by remember { mutableStateOf(prefs.region) }
+    var home by remember { mutableStateOf(prefs.homeRegion) }
     val regions = MqttPrefs.REGIONS
     SectionCard("Region") {
         Text(
@@ -695,8 +696,24 @@ private fun RegionCard(ctx: Context, session: MeshSession) {
             session.setRegion(region) // switch the shown per-region feed + push scope
             if (prefs.enabled) MeshConnection.setMqttEnabled(ctx, true) // reconnect to the new topic
         }
+
+        Text(
+            "Where your companion's radio is. Packets it hears carry no region of their own, so Home is " +
+                "what attributes them to a place — leave it unset and they collect under \"Home (not set)\". " +
+                "Nothing is lost either way: choosing (or changing) Home re-files everything already stored.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+        EnumDropdown("Home region", listOf(HOME_NOT_SET) + regions.map { "${it.first} (${it.second})" },
+            home?.let { h -> regions.indexOfFirst { it.second == h } + 1 } ?: 0) { i ->
+            home = if (i == 0) null else regions[i - 1].second
+            prefs.homeRegion = home
+            session.setHomeRegion(home) // re-attribute companion traffic already collected
+        }
     }
 }
+
+private const val HOME_NOT_SET = "Not set"
 
 /** Configure + monitor the optional meshcore.ca MQTT live-packet subscription. */
 @Composable

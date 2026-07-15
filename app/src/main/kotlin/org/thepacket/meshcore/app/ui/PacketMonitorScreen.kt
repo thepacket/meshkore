@@ -57,6 +57,8 @@ import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.haversineKm
+import org.thepacket.meshcore.app.regionLabel
+import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.GroupCipher
@@ -95,8 +97,18 @@ fun PacketMonitorContent(
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
-    val channels by session.channels.collectAsStateWithLifecycle()
+    val deviceChannels by session.channels.collectAsStateWithLifecycle()
+    val observed by session.observedChannels.collectAsStateWithLifecycle()
+    val selectedRegion by session.region.collectAsStateWithLifecycle()
     val messages by session.messages.collectAsStateWithLifecycle()
+
+    // Decode with every key we hold that could apply to what's on screen: the companion's slots plus
+    // the keys we follow in the region being shown. The monitor is a diagnostic view — "not our
+    // channel" should mean we genuinely don't have the key, not that it's filed somewhere else.
+    val channels = remember(deviceChannels, observed, selectedRegion) {
+        deviceChannels + observed.filter { it.region == selectedRegion }
+            .map { ChannelEntry(index = -1, name = it.displayName, secret = it.secret) }
+    }
 
     // Apply the field filters (card) to the live feed.
     val filtered = remember(packets, filter) {
@@ -104,7 +116,8 @@ fun PacketMonitorContent(
     }
 
     // Region-aware name resolution for hop/source hashes (adverts' full keys, scoped by packet region).
-    val resolver = remember(packets, contacts) { NodeResolver(packets, contacts) }
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val resolver = remember(packets, contacts, home) { NodeResolver(packets, contacts, home) }
 
     // When grouping is on, fold packets sharing a payload fingerprint (flood rebroadcasts of the
     // same content) into one group. Groups keep first-seen order (newest activity first); the
@@ -195,6 +208,7 @@ fun PacketMonitorContent(
             allPackets = packets,
             pathResult = srcKey?.let { pathDiscovery[it.copyOf(6).toHex()] },
             onDiscoverPath = srcKey?.let { key -> { session.discoverPath(key) } },
+            home = home,
         ) { detail = null }
     }
 
@@ -229,6 +243,7 @@ private fun PacketDetailDialog(
     allPackets: List<RxLog>,
     pathResult: PathDiscoveryResult?,
     onDiscoverPath: (() -> Unit)?,
+    home: String?,
     onDismiss: () -> Unit,
 ) {
     val srcPos = sourcePosition(p, log.region, resolver)
@@ -299,6 +314,14 @@ private fun PacketDetailDialog(
                     p.traceTag?.let { kv("Trace tag", "0x%08X".format(it)) }
 
                     kv("Received", clockTime(log.receivedAtMs) + "  (${ageLabel(log.receivedAtMs)})")
+                    // MQTT packets carry their region in the topic; the companion's carry none and are
+                    // attributed to Home (Settings → Region). Saying which also tells you whose radio the
+                    // SNR/RSSI below belongs to — for an observed packet it's the relaying node's, not ours.
+                    kv(
+                        "Region",
+                        regionLabel(regionOf(log.region, home)) +
+                            if (log.region == null) "  ·  heard by your radio" else "  ·  observed over MQTT",
+                    )
                     kv("SNR / RSSI", "${log.snrDb} dB / ${log.rssi} dBm")
                     linkMargin(log.snrDb, self)?.let { kv("Link margin", it) }
                     kv("Length", "${log.length} B  (payload ${p.payloadLen} B)")

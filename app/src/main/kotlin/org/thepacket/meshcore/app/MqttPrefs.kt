@@ -26,6 +26,16 @@ class MqttPrefs(context: Context) {
         get() = (prefs.getString(KEY_REGION, DEFAULT_REGION) ?: DEFAULT_REGION).let { if (it == "+") DEFAULT_REGION else it }
         set(v) { prefs.edit().putString(KEY_REGION, v.trim()).apply() }
 
+    /**
+     * Where the BLE companion physically is, as an IATA code from [REGIONS]. Packets the companion
+     * hears carry no region of their own, so this is what attributes them to a place. Null until the
+     * user chooses: only they know where their radio is, and guessing files their traffic under
+     * someone else's city. See [regionOf].
+     */
+    var homeRegion: String?
+        get() = prefs.getString(KEY_HOME, null)?.takeIf { it.isNotBlank() }
+        set(v) { prefs.edit().putString(KEY_HOME, v?.trim()?.takeIf { it.isNotBlank() }).apply() }
+
     /** MQTT topic derived from the region — every node's packets under that region. */
     val topic: String get() = "meshcore/$region/+/packets"
 
@@ -40,6 +50,7 @@ class MqttPrefs(context: Context) {
         set(v) { prefs.edit().putString(KEY_PASS, v.trim()).apply() }
 
     companion object {
+        /** Region the feed observes until the user picks another. Says nothing about where *they* are. */
         const val DEFAULT_REGION = "YOW" // Ottawa
 
         /** Selectable brokers as (label, hidden URL). */
@@ -62,6 +73,7 @@ class MqttPrefs(context: Context) {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_BROKER = "broker"
         private const val KEY_REGION = "region"
+        private const val KEY_HOME = "home"
         private const val KEY_USER = "user"
         private const val KEY_PASS = "pass"
     }

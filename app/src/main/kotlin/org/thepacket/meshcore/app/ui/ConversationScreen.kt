@@ -76,6 +76,12 @@ fun ConversationScreen(
     roomLogin: RepeaterLogin?,
     /** True for a group channel (its incoming texts usually embed the sender's name). */
     isChannel: Boolean,
+    /**
+     * True when this conversation can only be watched — a channel in a region we observe over MQTT.
+     * We have no radio there and nothing to transmit with, so there is no composer at all rather than
+     * one that fails on send.
+     */
+    readOnly: Boolean = false,
     onBack: () -> Unit,
     onSend: (String) -> Unit,
     onLogin: (password: String) -> Unit,
@@ -161,25 +167,32 @@ fun ConversationScreen(
                 items(messages, key = { it.localId }) { m ->
                     MessageBubble(
                         m, m.authorPrefix?.let(authorName), onResend,
-                        onReply = { replyTo = quoteOf(m, m.authorPrefix?.let(authorName), title, self, isChannel) },
+                        // Quoting exists to seed a reply, so it does nothing without a composer.
+                        onReply = if (readOnly) null else ({
+                            replyTo = quoteOf(m, m.authorPrefix?.let(authorName), title, self, isChannel)
+                        }),
                     )
                 }
             }
-            replyTo?.let { r ->
-                ReplyStrip(r, onCancel = { replyTo = null })
+            if (readOnly) {
+                ObservingNote()
+            } else {
+                replyTo?.let { r ->
+                    ReplyStrip(r, onCancel = { replyTo = null })
+                }
+                ComposeBar(
+                    draft = draft,
+                    onDraftChange = { draft = it },
+                    onSend = {
+                        val t = draft.trim()
+                        if (t.isNotEmpty()) {
+                            // Interop with the on-device UI: a reply is a leading quoted "> …" line.
+                            onSend(replyTo?.let { "> $it\n$t" } ?: t)
+                            draft = ""; replyTo = null
+                        }
+                    },
+                )
             }
-            ComposeBar(
-                draft = draft,
-                onDraftChange = { draft = it },
-                onSend = {
-                    val t = draft.trim()
-                    if (t.isNotEmpty()) {
-                        // Interop with the on-device UI: a reply is a leading quoted "> …" line.
-                        onSend(replyTo?.let { "> $it\n$t" } ?: t)
-                        draft = ""; replyTo = null
-                    }
-                },
-            )
         }
     }
 
@@ -197,7 +210,8 @@ private fun MessageBubble(
     m: ChatMessage,
     author: String?,
     onResend: (ChatMessage) -> Unit,
-    onReply: () -> Unit = {},
+    /** Null when there's nothing to reply with — the bubble then isn't tappable at all. */
+    onReply: (() -> Unit)? = null,
 ) {
     val align = if (m.incoming) Alignment.CenterStart else Alignment.CenterEnd
     val bubble = if (m.incoming) MaterialTheme.colorScheme.surfaceVariant
@@ -208,7 +222,7 @@ private fun MessageBubble(
             Modifier
                 .widthIn(max = 280.dp)
                 .background(bubble, RoundedCornerShape(14.dp))
-                .clickable(onClick = onReply)
+                .let { if (onReply != null) it.clickable(onClick = onReply) else it }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             // Room posts: who wrote it (the conversation is the room, the author is the signer).
@@ -372,6 +386,19 @@ private fun statusLabel(s: MsgStatus): Pair<String, Color> = when (s) {
     MsgStatus.Delivered -> "Delivered ✓" to MaterialTheme.colorScheme.secondary
     MsgStatus.Failed -> "Failed" to MaterialTheme.colorScheme.error
     MsgStatus.Received -> "" to Color.Unspecified
+}
+
+/** Stands in for the composer on an observed channel, so the absence reads as deliberate. */
+@Composable
+private fun ObservingNote() {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Observing over MQTT — read-only. Your radio isn't in this region.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
 }
 
 @Composable

@@ -3,6 +3,7 @@ package org.thepacket.meshcore.app
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.hexToBytes
 import org.thepacket.meshcore.protocol.toHex
+import java.security.MessageDigest
 
 /**
  * A recently-heard station (from advert pushes), with signal correlated from the
@@ -59,6 +60,25 @@ data class ChannelEntry(val index: Int, val name: String, val secret: ByteArray 
     override fun hashCode() = (index * 31 + name.hashCode()) * 31 + secret.contentHashCode()
 }
 
+/**
+ * A channel we only *listen* to, in a region observed over MQTT. Unlike [ChannelEntry] there is no
+ * device slot behind it — nothing transmits on it — so it is identified by its key within its region
+ * and the firmware's eight-slot limit doesn't apply: follow as many as you like purely to decode.
+ *
+ * Regions never share channels. The same key observed in two regions is two channels with two
+ * histories, which is why [region] is part of identity while [name] (display only) is not.
+ */
+data class ObservedChannel(val region: String, val name: String, val secret: ByteArray) {
+    val displayName: String get() = name.ifBlank { "Channel ${Conversation.keyFingerprint(secret).take(6)}" }
+
+    /** Where this channel's observed history is bucketed. */
+    val conversationId: String get() = Conversation.observedChannelId(region, secret)
+
+    override fun equals(other: Any?) = other is ObservedChannel &&
+        region == other.region && secret.contentEquals(other.secret)
+    override fun hashCode() = region.hashCode() * 31 + secret.contentHashCode()
+}
+
 /** Delivery lifecycle of a chat message. */
 enum class MsgStatus { Sending, Sent, Delivered, Failed, Received }
 
@@ -98,5 +118,20 @@ sealed interface Conversation {
         fun dmId(contact: Contact): String = contact.publicKey.copyOf(6).toHex()
         fun dmId(pubKeyPrefix6: ByteArray): String = pubKeyPrefix6.copyOf(6).toHex()
         fun channelId(index: Int): String = "ch:$index"
+
+        /**
+         * Id for an observed channel's history: its region plus a fingerprint of its key.
+         *
+         * Not the slot — there isn't one — and deliberately not the key itself: conversation ids are
+         * persisted in [ChatStore], and the PSK shouldn't ride along in them. Device channels keep
+         * their slot-based [channelId]; the two schemes share no namespace, so observed history and
+         * companion history never collide even for the same key.
+         */
+        fun observedChannelId(region: String, secret: ByteArray): String =
+            "ch:$region:${keyFingerprint(secret)}"
+
+        /** First 8 bytes of SHA-256 over the 128-bit key, hex — stable across runs, and one-way. */
+        fun keyFingerprint(secret: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(secret.copyOf(16)).copyOf(8).toHex()
     }
 }

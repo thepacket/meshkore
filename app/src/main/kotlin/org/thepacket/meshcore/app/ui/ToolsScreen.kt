@@ -400,8 +400,9 @@ private fun TraceTool(session: MeshSession, self: SelfInfo?, onBack: () -> Unit)
     val heard by session.heard.collectAsStateWithLifecycle()
     val allContacts by session.allContacts.collectAsStateWithLifecycle()
     val history by session.packetHistory.collectAsStateWithLifecycle()
-    // Trace runs on our own (home) mesh — resolve hop bytes within the home region (Ottawa default).
-    val resolver = remember(history, allContacts) { NodeResolver(history, allContacts) }
+    // Trace runs on our own mesh — resolve hop bytes within whichever region is set as Home.
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val resolver = remember(history, allContacts, home) { NodeResolver(history, allContacts, home) }
     val selected = remember { mutableStateListOf<Contact>() } // ordered path (duplicates allowed)
     val r = result
 

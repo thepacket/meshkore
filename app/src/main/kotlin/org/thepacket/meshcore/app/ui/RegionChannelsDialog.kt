@@ -39,12 +39,15 @@ import org.thepacket.meshcore.app.RegionChannels
 import java.util.Locale
 
 /**
- * Browse the community region catalog and add channels into free slots. Two steps: pick a
- * country, then tick the channels to add (capped at [freeSlots]). Catalog is fetched on open.
+ * Browse the community region catalog and add channels. Two steps: pick a country, then tick the
+ * channels to add. Catalog is fetched on open.
+ *
+ * [freeSlots] caps the selection when the destination is the companion's slots; pass null when adding
+ * observed channels, which have no slots and no limit. [onAdd] decides where the picks actually go.
  */
 @Composable
 fun RegionChannelsDialog(
-    freeSlots: Int,
+    freeSlots: Int?,
     onAdd: (List<RegionChannel>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -129,7 +132,7 @@ private fun ChannelChecklist(
     query: String,
     onQuery: (String) -> Unit,
     selected: MutableList<RegionChannel>,
-    freeSlots: Int,
+    freeSlots: Int?,
 ) {
     val filtered = remember(channels, query) {
         if (query.isBlank()) channels
@@ -141,16 +144,17 @@ private fun ChannelChecklist(
         value = query, onValueChange = onQuery, modifier = Modifier.fillMaxWidth(),
         label = { Text("Search") }, singleLine = true,
     )
+    val atLimit = freeSlots != null && selected.size >= freeSlots
     Text(
-        "Selected ${selected.size} / $freeSlots free slot(s)",
+        if (freeSlots == null) "Selected ${selected.size}" else "Selected ${selected.size} / $freeSlots free slot(s)",
         style = MaterialTheme.typography.labelMedium,
-        color = if (selected.size >= freeSlots) MaterialTheme.colorScheme.primary
+        color = if (atLimit) MaterialTheme.colorScheme.primary
         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
     )
     LazyColumn(Modifier.fillMaxWidth().heightIn(max = 380.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         items(filtered, key = { it.name }) { ch ->
             val checked = ch in selected
-            val canCheck = checked || selected.size < freeSlots
+            val canCheck = checked || !atLimit
             Row(
                 Modifier.fillMaxWidth()
                     .clickable(enabled = canCheck) { if (checked) selected.remove(ch) else selected.add(ch) }

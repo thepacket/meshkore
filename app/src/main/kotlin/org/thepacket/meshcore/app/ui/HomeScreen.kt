@@ -73,7 +73,10 @@ import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.Conversation
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.PublicChannel
+import org.thepacket.meshcore.app.ObservedChannel
 import org.thepacket.meshcore.app.RegionChannels
+import org.thepacket.meshcore.app.regionLabel
+import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
@@ -111,7 +114,15 @@ fun HomeContent(
         when (tab) {
             0 -> AllContactsList(session, self, onOpenConversation, onShowOnMap)
             1 -> ContactsList(session, self, contacts, onOpenConversation, onShowOnMap)
-            else -> ChannelsList(session, channels, onOpenConversation)
+            else -> {
+                // Channels follow the selected region, exactly as the contact lists do: your companion's
+                // own slots when you're looking at Home, otherwise the read-only keys we follow in the
+                // region being observed. The two never mix — different ids, separate histories.
+                val region by session.region.collectAsStateWithLifecycle()
+                val home by session.homeRegion.collectAsStateWithLifecycle()
+                if (home != null && region == home) ChannelsList(session, channels, onOpenConversation)
+                else ObservedChannelsList(session, region, onOpenConversation)
+            }
         }
     }
 
@@ -140,10 +151,12 @@ private fun AllContactsList(
     var confirmSend by remember { mutableStateOf(false) }
     // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
     var typeFilter by remember { mutableStateOf(0) }
-    // The list shows only the region selected in Settings (untagged contacts = home/Ottawa).
+    // The list shows only the region selected in Settings. Contacts heard by the companion carry no
+    // region of their own, so they belong to whichever region is set as Home.
     val region by session.region.collectAsStateWithLifecycle()
-    val regionScoped = remember(allContacts, region) {
-        allContacts.filter { NodeResolver.regionOf(it.region) == region }
+    val home by session.homeRegion.collectAsStateWithLifecycle()
+    val regionScoped = remember(allContacts, region, home) {
+        allContacts.filter { regionOf(it.region, home) == region }
     }
 
     // Toast the outcome of a push once it completes.
@@ -604,6 +617,169 @@ private fun ChannelsList(
             onDelete = { session.deleteChannel(ch.index); editing = null },
         )
     }
+}
+
+/**
+ * Channels we follow in a region we only observe. No slots, no eight-channel cap and no sending —
+ * these keys exist purely to make the region's traffic readable, so the list is flatter than
+ * [ChannelsList]: add a key, or stop following it.
+ */
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ObservedChannelsList(
+    session: MeshSession,
+    region: String,
+    onOpen: (String, String) -> Unit,
+) {
+    val all by session.observedChannels.collectAsStateWithLifecycle()
+    val unread by session.unread.collectAsStateWithLifecycle()
+    val ctx = LocalContext.current
+    var addingCatalog by remember { mutableStateOf(false) }
+    var creating by remember { mutableStateOf(false) }
+    var removing by remember { mutableStateOf<ObservedChannel?>(null) }
+
+    val channels = remember(all, region) {
+        all.filter { it.region == region }.sortedBy { it.displayName.lowercase() }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(onClick = { creating = true }) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("  Add key")
+            }
+            OutlinedButton(onClick = { addingCatalog = true }) {
+                Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("  From catalog")
+            }
+        }
+        if (channels.isEmpty()) {
+            EmptyHint(
+                "No channels followed in ${regionLabel(region)}. Add a key to read this region's traffic — " +
+                    "you're observing, so nothing here can be sent to."
+            )
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(channels, key = { it.conversationId }) { ch ->
+                    ConversationRow(
+                        icon = Icons.Default.Campaign,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        title = ch.displayName,
+                        subtitle = "${regionLabel(region)} · read-only · long-press to remove",
+                        onClick = { onOpen(ch.conversationId, ch.displayName) },
+                        onLongClick = { removing = ch },
+                        unread = unread[ch.conversationId] ?: 0,
+                    )
+                }
+            }
+        }
+    }
+
+    if (addingCatalog) {
+        RegionChannelsDialog(
+            freeSlots = null, // observed channels have no slots to run out of
+            onAdd = { picked ->
+                val n = session.addObservedChannels(region, picked.map { it.name to it.secret })
+                Toast.makeText(
+                    ctx,
+                    if (n == 0) "Already following those" else "Now following $n channel(s)",
+                    Toast.LENGTH_SHORT,
+                ).show()
+                addingCatalog = false
+            },
+            onDismiss = { addingCatalog = false },
+        )
+    }
+
+    if (creating) {
+        ObservedChannelDialog(
+            region = region,
+            onDismiss = { creating = false },
+            onSave = { name, secret ->
+                val n = session.addObservedChannels(region, listOf(name to secret))
+                if (n == 0) Toast.makeText(ctx, "Already following that key", Toast.LENGTH_SHORT).show()
+                creating = false
+            },
+        )
+    }
+
+    removing?.let { ch ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text("Stop following?") },
+            text = {
+                Text(
+                    "${ch.displayName} in ${regionLabel(region)} will stop being decoded. Messages already " +
+                        "collected are kept — add the key back and they reappear."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { session.removeObservedChannel(ch); removing = null }) { Text("Stop") }
+            },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * Add a key to follow in an observed region: a name plus either a 128-bit hex key, a scanned
+ * channel-key QR, or a `#hashtag` name whose key derives from the name itself.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun ObservedChannelDialog(
+    region: String,
+    onDismiss: () -> Unit,
+    onSave: (name: String, secret: ByteArray) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var secretHex by remember { mutableStateOf("") }
+    val cleanSecret = secretHex.trim().replace(" ", "").lowercase()
+    val secretValid = cleanSecret.length == 32 && cleanSecret.all { it in "0123456789abcdef" }
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result.contents?.let { parseChannelKeyHex(it)?.let { hex -> secretHex = hex } }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Follow a channel in ${regionLabel(region)}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    label = { Text("Name") }, modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = secretHex, onValueChange = { secretHex = it }, singleLine = true,
+                    label = { Text("Key (32 hex chars)") }, modifier = Modifier.fillMaxWidth(),
+                    isError = secretHex.isNotBlank() && !secretValid,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { scanLauncher.launch(ScanOptions().setBeepEnabled(false)) }) {
+                        Text("Scan QR")
+                    }
+                    // A #hashtag channel's key is derived from its own name, so no key is needed.
+                    TextButton(
+                        onClick = { secretHex = RegionChannels.hashChannelSecret(name.trim()).toHex() },
+                        enabled = name.trim().startsWith("#"),
+                    ) { Text("Derive from #name") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(name.trim(), cleanSecret.hexToBytes()) },
+                enabled = name.isNotBlank() && secretValid,
+            ) { Text("Follow") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
