@@ -1,10 +1,13 @@
 package org.thepacket.meshcore.app
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.thepacket.meshcore.ble.CompanionScanner
+import org.thepacket.meshcore.ble.LinkState
 import org.thepacket.meshcore.ble.NordicMeshCoreLink
 
 /**
@@ -34,7 +37,18 @@ object MeshConnection {
     fun setMqttEnabled(context: Context, enabled: Boolean) {
         val prefs = MqttPrefs(context)
         prefs.enabled = enabled
-        if (enabled) mqtt.start(prefs.brokerUrls, prefs.topic, prefs.username, prefs.password, prefs.broker) else mqtt.stop()
+        if (enabled) {
+            mqtt.start(prefs.brokerUrls, prefs.topic, prefs.username, prefs.password, prefs.broker)
+            // Run the foreground service so the OS doesn't suspend the process (and drop the feed) while
+            // backgrounded/asleep — same as the BLE companion. The service self-stops when neither runs.
+            ContextCompat.startForegroundService(context, Intent(context, MeshConnectionService::class.java))
+        } else {
+            mqtt.stop()
+            // Drop the foreground service unless BLE is still holding it.
+            if (link.state.value != LinkState.Connected) {
+                context.applicationContext.stopService(Intent(context, MeshConnectionService::class.java))
+            }
+        }
     }
 
     /** Idempotent — safe to call from both the Application and the ViewModel. */

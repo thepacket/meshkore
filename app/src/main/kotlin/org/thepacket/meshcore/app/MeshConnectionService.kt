@@ -46,11 +46,9 @@ class MeshConnectionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundConnection()
 
-        // Drop the foreground notification and stop once the link goes down.
+        // Stop only when neither the BLE link nor the MQTT feed needs us running.
         scope.launch {
-            MeshConnection.link.state.collectLatest { s ->
-                if (s == LinkState.Disconnected || s == LinkState.Failed) stopSelf()
-            }
+            MeshConnection.link.state.collectLatest { if (!shouldRun()) stopSelf() else startForegroundConnection() }
         }
         // Keep the "Connected to <node>" line current as self-info arrives.
         scope.launch {
@@ -70,20 +68,45 @@ class MeshConnectionService : Service() {
 
     // ---- notifications ---------------------------------------------------
 
+    /** Keep running while the BLE link is up/coming up, or while the MQTT feed is enabled. */
+    private fun shouldRun(): Boolean {
+        val s = MeshConnection.link.state.value
+        val bleActive = s == LinkState.Connected || s == LinkState.Connecting || s == LinkState.Bonding
+        return bleActive || MqttPrefs(this).enabled
+    }
+
     private fun startForegroundConnection() {
+        val bleUp = MeshConnection.link.state.value == LinkState.Connected
         val name = session.self.value?.name?.takeIf { it.isNotBlank() } ?: "MeshCore device"
+        val mqttOn = MqttPrefs(this).enabled
+        val text = when {
+            bleUp && mqttOn -> "Listening to $name + MQTT feed"
+            bleUp -> "Listening for messages from $name"
+            mqttOn -> "Collecting live packets over MQTT"
+            else -> "Running"
+        }
         val n = NotificationCompat.Builder(this, CH_CONNECTION)
-            .setContentTitle("MeshKore connected")
-            .setContentText("Listening for messages from $name")
+            .setContentTitle(if (bleUp) "MeshKore connected" else "MeshKore running")
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_stat_mesh)
             .setOngoing(true)
             .setContentIntent(openAppIntent(null, null))
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(ID_CONNECTION, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        } else {
-            startForeground(ID_CONNECTION, n)
+        // BLE active → connectedDevice; MQTT-only → specialUse (its prerequisites don't need BLE perms,
+        // and it isn't time-limited like dataSync). Pre-34, the type isn't strictly enforced.
+        val bleActive = MeshConnection.link.state.value.let {
+            it == LinkState.Connected || it == LinkState.Connecting || it == LinkState.Bonding
+        }
+        when {
+            Build.VERSION.SDK_INT >= 34 -> startForeground(
+                ID_CONNECTION, n,
+                if (bleActive) ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+                startForeground(ID_CONNECTION, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            else -> startForeground(ID_CONNECTION, n)
         }
     }
 

@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- MQTT-only (no BLE) live-packet collection runs as a special-use foreground service so it
+         isn't suspended while backgrounded/asleep, and isn't subject to the dataSync time limit. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:allowBackup="true"
@@ -41,6 +44,10 @@
         <service
             android:name=".MeshConnectionService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Collecting meshcore.ca live packets over MQTT while backgrounded" />
+        </service>
     </application>
 </manifest>

@@ -47,7 +47,12 @@ data class UiState(
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
 
-    init { MeshConnection.init(app) }
+    init {
+        MeshConnection.init(app)
+        // If the MQTT feed was left enabled, run the foreground service so collection survives
+        // backgrounding/sleep from launch (not only after toggling MQTT in Settings).
+        if (MqttPrefs(app).enabled) startConnectionService()
+    }
 
     // The link + session are process-scoped (survive Activity recreation, run in the service).
     private val scanner get() = MeshConnection.scanner
@@ -124,7 +129,8 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun disconnect() {
-        stopConnectionService()
+        // Keep the foreground service if the MQTT feed is still collecting; otherwise drop it.
+        if (!MqttPrefs(getApplication()).enabled) stopConnectionService()
         viewModelScope.launch { runCatching { link.disconnect() } }
         session.reset()
         _ui.update { it.copy(screen = Screen.Connect, observing = false) }
