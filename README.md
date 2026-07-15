@@ -21,8 +21,9 @@ Seven tabs — **Chats · Heard · Packets · Tools · Map · Stats · Settings*
 - Conversations and unread counts **persist** across reconnects/restarts; **background
   notifications** for new messages (per-type toggle).
 - **Aggregate address book** — All contacts is the deduped, persistent union of contacts from
-  **every device you've connected to**; one tap **pushes the whole book** to the connected device,
-  skipping duplicates.
+  **every device you've connected to** *and every node observed advertising* (companion + MQTT),
+  each tagged with its region; one tap pushes the **home-region contacts of the selected types** to
+  the connected device, skipping duplicates.
 - **Contact actions** (long-press) — share, reset path, export, remove, request telemetry
   (live, plus **min / max / avg** over a window), show on map, get path to node, and cached
   **advert path**; opening a contact re-reads its current record from the device. Import from
@@ -76,29 +77,34 @@ Analytics (work from the packet history, with or without a device):
 - **Top Talkers** / **Top Repeaters** / **Repeater Pairs** — busiest sources, busiest relays, and
   repeater pairs that co-occur in paths (tap a pair member for its contact card + show-on-map).
 - **Top Senders** — channel messages ranked by sender; **Message Types** — packets by payload type.
-- **Distributions** — **SNR**, **RSSI**, **hop count**, and **packet size** histograms; **Signal Quality**
-  (avg-SNR trend + volume over time); and an **SNR vs RSSI** scatter over link-quality zones.
+- **Hash Size** — path-hash sizes (1/2/3-byte routing IDs) across packets and by unique repeater.
+- **Distributions** — **SNR**, **RSSI**, **hop count**, **hop distance** (km between consecutive path
+  hops), and **packet size** histograms; **Signal Quality** (avg-SNR trend + volume over time); and an
+  **SNR vs RSSI** scatter over link-quality zones.
 
 **Region-aware resolution** — the 1-byte routing hashes in packet paths collide across the multi-region
 meshcore.ca feed, so each packet is tagged with its region (from the MQTT topic) and hops are resolved
 per region using adverts' full public keys; region-less packets/contacts are assumed Ottawa. This keeps
 Top Talkers / Top Repeaters / Repeater Pairs / topology **and the packet monitor** from merging distinct
-nodes that share a hash. **Contacts are regional** — every observed advert (companion or MQTT) becomes a
-contact tagged with the region it was heard in (survives restarts), and the **All contacts** list gains a
-region filter when the book spans 2+ regions. The aggregate book collects *every* observed node, but only
-the contact **types you select** (Settings → *Contacts pushed to device*; chat by default) are sent to a
-connected companion.
+nodes that share a hash — across every analytics tool. **Contacts are regional** — every observed advert
+(companion or MQTT) becomes a contact tagged with the region it was heard in (survives restarts), and the
+**All contacts** list gains a region filter when the book spans 2+ regions. A single top-level **Region**
+selector (Settings) is the app's home region: it drives the MQTT subscription and scopes the device push.
+The aggregate book collects *every* observed node, but "Send to device" only pushes contacts in the **home
+region** whose **type you selected** (Settings → *Contacts pushed to device*; chat by default).
 
-**Settings** — full editable device config: node name, region presets, frequency / bandwidth / SF /
+**Settings** — top of the list is the global **Region** selector and **Global Contacts** / **Device
+contacts** cards (each with **export all / import all / delete all**; global contacts also work with no
+device). Then full editable device config: node name, radio region presets, frequency / bandwidth / SF /
 coding rate, TX power, client-repeat (with allowed-frequency guard), advertised position (typed, picked
-on a map, or phone GPS on an explicit tap), network & telemetry, tuning, auto-add, path-hash size,
-**device variables** (firmware custom vars / sensor settings), **pairing PIN**, and a live **device
-clock** (drift vs. the phone + one-tap sync); plus **identity backup** (export / import the node's
-private key), device info, config/app-data export & import, debug logs, reboot, and factory reset.
-Also here: **live packets over MQTT** — optionally subscribe to the **meshcore.ca** feed (broker +
-region picker, token auth) to inject observed packets into the packet monitor, Heard list, traffic
-stats, and topology, with or without a BLE connection. On connection loss the feed **fails over to the
-other broker** automatically.
+on a map, or phone GPS on an explicit tap), **which contact types are pushed to the device**, network &
+telemetry, tuning, auto-add, path-hash size, **device variables** (firmware custom vars / sensor
+settings), **pairing PIN**, and a live **device clock** (drift vs. the phone + one-tap sync); plus
+**identity backup** (export / import the node's private key), device info, config/app-data export &
+import, debug logs, reboot, and factory reset. Also here: **live packets over MQTT** — optionally
+subscribe to the **meshcore.ca** feed (broker + token auth; region from the global selector) to inject
+observed packets into the packet monitor, Heard list, traffic stats, and topology, with or without a BLE
+connection. On connection loss the feed **fails over to the other broker** automatically.
 
 Runtime permissions: Bluetooth (and, on Android ≤ 11, location for BLE scanning); **location** — only
 when you tap "Use current location" to set this node's position; and **camera**, only when scanning a QR.
