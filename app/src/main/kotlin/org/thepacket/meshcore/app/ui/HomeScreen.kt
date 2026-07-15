@@ -72,7 +72,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.Conversation
 import org.thepacket.meshcore.app.MeshSession
-import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.app.PublicChannel
 import org.thepacket.meshcore.app.RegionChannels
 import org.thepacket.meshcore.protocol.Contact
@@ -141,14 +140,10 @@ private fun AllContactsList(
     var confirmSend by remember { mutableStateOf(false) }
     // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
     var typeFilter by remember { mutableStateOf(0) }
-    // Region filter (null = all). Regions are learned from observed adverts; untagged = home (Ottawa).
-    var regionFilter by remember { mutableStateOf<String?>(null) }
-    val regions = remember(allContacts) {
-        allContacts.map { NodeResolver.regionOf(it.region) }.distinct().sorted()
-    }
-    val regionScoped = remember(allContacts, regionFilter) {
-        if (regionFilter == null) allContacts
-        else allContacts.filter { NodeResolver.regionOf(it.region) == regionFilter }
+    // The list shows only the region selected in Settings (untagged contacts = home/Ottawa).
+    val region by session.region.collectAsStateWithLifecycle()
+    val regionScoped = remember(allContacts, region) {
+        allContacts.filter { NodeResolver.regionOf(it.region) == region }
     }
 
     // Toast the outcome of a push once it completes.
@@ -163,13 +158,9 @@ private fun AllContactsList(
     // Keys already present on the connected device — so we can show what a push would add.
     val onDeviceKeys = remember(deviceContacts) { deviceContacts.map { it.publicKey.toHex() }.toSet() }
     val pushTypes by session.pushTypes.collectAsStateWithLifecycle()
-    // Home region = the MQTT-selected region; a companion can only use nodes in its own region.
-    val homeRegion = remember { MqttPrefs(ctx).region }
-    // Only the user-selected types in the home region get pushed, so the count reflects those.
-    val missingCount = remember(allContacts, onDeviceKeys, pushTypes, homeRegion) {
-        allContacts.count {
-            it.type in pushTypes && (it.region ?: homeRegion) == homeRegion && it.publicKey.toHex() !in onDeviceKeys
-        }
+    // Only the user-selected types in the selected region get pushed, so the count reflects those.
+    val missingCount = remember(regionScoped, onDeviceKeys, pushTypes) {
+        regionScoped.count { it.type in pushTypes && it.publicKey.toHex() !in onDeviceKeys }
     }
 
     // Split the region-scoped address book by type once, so each filter tab shows a live count.
@@ -208,9 +199,6 @@ private fun AllContactsList(
                 Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text(if (missingCount > 0) "  Send $missingCount to device" else "  All on device")
             }
-        }
-        if (regions.size > 1) {
-            RegionFilterRow(regions = regions, selected = regionFilter, onSelect = { regionFilter = it })
         }
         TypeFilterRow(
             selected = typeFilter,
@@ -295,7 +283,7 @@ private fun AllContactsList(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { confirmSend = false; session.pushAllContactsToDevice(homeRegion) }) {
+                TextButton(onClick = { confirmSend = false; session.pushAllContactsToDevice(region) }) {
                     Text("Send")
                 }
             },
@@ -326,21 +314,6 @@ private fun TypeFilterRow(
             label = { Text("Room Servers ($roomCount)") })
         FilterChip(selected = selected == 3, onClick = { onSelect(3) },
             label = { Text("Sensors ($sensorCount)") })
-    }
-}
-
-/** Region filter chips ("All" + each learned region). Shown only when the book spans 2+ regions. */
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-@Composable
-private fun RegionFilterRow(regions: List<String>, selected: String?, onSelect: (String?) -> Unit) {
-    FlowRow(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(selected = selected == null, onClick = { onSelect(null) }, label = { Text("All regions") })
-        regions.forEach { r ->
-            FilterChip(selected = selected == r, onClick = { onSelect(r) }, label = { Text(r) })
-        }
     }
 }
 
