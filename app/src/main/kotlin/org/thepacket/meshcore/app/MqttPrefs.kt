@@ -59,9 +59,14 @@ class MqttPrefs(context: Context) {
             "Secondary" to "wss://mqtt2.meshcore.ca:443/mqtt",
         )
 
-        /** Selectable regions as (city, IATA). */
+        /**
+         * Selectable regions as (city, IATA). Canadian cities first (the app's home turf), then the
+         * international regions seen on the meshcore.ca feed so they show a city name instead of a raw
+         * code. Any region not listed still works — it just displays as its bare code (see [regionLabel]).
+         */
         val REGIONS: List<Pair<String, String>> = listOf(
             "All" to "+",
+            // Canada
             "Toronto" to "YYZ",
             "Vancouver" to "YVR",
             "Montréal" to "YUL",
@@ -70,6 +75,48 @@ class MqttPrefs(context: Context) {
             "Ottawa" to "YOW",
             "Halifax" to "YHZ",
             "Winnipeg" to "YWG",
+            "Québec City" to "YQB",
+            "Hamilton" to "YHM",
+            "London" to "YXU",
+            "Saskatoon" to "YXE",
+            "Victoria" to "YYJ",
+            "Kingston" to "YGK",
+            "Kitchener" to "YKF",
+            "Kamloops" to "YKA",
+            "Nanaimo" to "YCD",
+            "Thunder Bay" to "YQT",
+            "Lethbridge" to "YQL",
+            "Saint John" to "YSJ",
+            "Prince Albert" to "YPA",
+            "Muskoka" to "YQA",
+            "Barrie" to "YLK",
+            "Trenton" to "YTR",
+            "Pembroke" to "YTA",
+            "Alma" to "YTF",
+            "St-Jean" to "YJN",
+            "St-Hubert" to "YHU",
+            // International
+            "Appleton" to "ATW",
+            "Barcelona" to "BCN",
+            "Cape Town" to "CPT",
+            "New Bern" to "EWN",
+            "Münster" to "FMO",
+            "Spokane" to "GEG",
+            "Greensboro" to "GSO",
+            "Łódź" to "LCJ",
+            "Lisbon" to "LIS",
+            "Linz" to "LNZ",
+            "Manchester" to "MAN",
+            "Milwaukee" to "MKE",
+            "Prague" to "PRG",
+            "Pontiac" to "PTK",
+            "Rotterdam" to "RTM",
+            "Seattle" to "SEA",
+            "San Francisco" to "SFO",
+            "St. George" to "SGU",
+            "Salt Lake City" to "SLC",
+            "Orange County" to "SNA",
+            "Warsaw" to "WAW",
         )
         private const val KEY_ENABLED = "enabled"
         private const val KEY_BROKER = "broker"
