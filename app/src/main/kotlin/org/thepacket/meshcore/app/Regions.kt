@@ -7,6 +7,17 @@ package org.thepacket.meshcore.app
 const val HOME_UNSET = "HOME"
 
 /**
+ * Sentinel region meaning "all regions": the MQTT subscription widens to every region's topic
+ * (`meshcore/+/+/packets`) and region-scoped views merge every bucket. Packets still carry their own
+ * concrete region, so 1-byte hash resolution stays region-scoped — only the intake/display widen.
+ */
+const val ALL_REGIONS = "+"
+
+/** Whether a view on [selected] should show an item filed under [itemRegion]. "All" matches everything. */
+fun regionMatches(selected: String, itemRegion: String): Boolean =
+    selected == ALL_REGIONS || selected == itemRegion
+
+/**
  * The region a packet or contact belongs to.
  *
  * MQTT packets carry their region in the topic. Traffic the companion hears carries none, and

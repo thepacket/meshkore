@@ -58,6 +58,7 @@ import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.app.regionLabel
+import org.thepacket.meshcore.app.regionMatches
 import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
@@ -106,7 +107,7 @@ fun PacketMonitorContent(
     // the keys we follow in the region being shown. The monitor is a diagnostic view — "not our
     // channel" should mean we genuinely don't have the key, not that it's filed somewhere else.
     val channels = remember(deviceChannels, observed, selectedRegion) {
-        deviceChannels + observed.filter { it.region == selectedRegion }
+        deviceChannels + observed.filter { regionMatches(selectedRegion, it.region) }
             .map { ChannelEntry(index = -1, name = it.displayName, secret = it.secret) }
     }
 

@@ -55,6 +55,7 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.thepacket.meshcore.app.ALL_REGIONS
 import org.thepacket.meshcore.app.MeshConnection
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.MqttPrefs
@@ -682,6 +683,8 @@ private fun RegionCard(ctx: Context, session: MeshSession) {
     var region by remember { mutableStateOf(prefs.region) }
     var home by remember { mutableStateOf(prefs.homeRegion) }
     val regions = MqttPrefs.REGIONS
+    // Home is a concrete physical location, so it can't be "All" — offer only the real regions there.
+    val homeRegions = remember(regions) { regions.filter { it.second != ALL_REGIONS } }
     SectionCard("Region") {
         Text(
             "Your mesh region. Sets the meshcore.ca MQTT subscription, scopes which contacts are pushed " +
@@ -704,9 +707,9 @@ private fun RegionCard(ctx: Context, session: MeshSession) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
-        EnumDropdown("Home region", listOf(HOME_NOT_SET) + regions.map { "${it.first} (${it.second})" },
-            home?.let { h -> regions.indexOfFirst { it.second == h } + 1 } ?: 0) { i ->
-            home = if (i == 0) null else regions[i - 1].second
+        EnumDropdown("Home region", listOf(HOME_NOT_SET) + homeRegions.map { "${it.first} (${it.second})" },
+            home?.let { h -> homeRegions.indexOfFirst { it.second == h } + 1 } ?: 0) { i ->
+            home = if (i == 0) null else homeRegions[i - 1].second
             prefs.homeRegion = home
             session.setHomeRegion(home) // re-attribute companion traffic already collected
         }

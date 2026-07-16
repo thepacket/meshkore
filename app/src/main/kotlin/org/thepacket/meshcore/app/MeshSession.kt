@@ -242,7 +242,11 @@ class MeshSession(
      */
     private val _historyByRegion = MutableStateFlow<Map<String, List<RxLog>>>(emptyMap())
     val packetHistory: StateFlow<List<RxLog>> =
-        combine(_historyByRegion, _region) { m, r -> m[r] ?: emptyList() }
+        combine(_historyByRegion, _region) { m, r ->
+            // "All" merges every region's bucket (newest-first, bounded); otherwise show just that region's.
+            if (r == ALL_REGIONS) m.values.flatten().sortedByDescending { it.receivedAtMs }.take(MAX_PACKET_HISTORY)
+            else m[r] ?: emptyList()
+        }
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private fun addToHistory(log: RxLog) {

@@ -21,9 +21,9 @@ class MqttPrefs(context: Context) {
     /** All broker URLs, in list order — the feed fails over across these starting from [broker]. */
     val brokerUrls: List<String> get() = BROKERS.map { it.second }
 
-    /** Selected region IATA code. A previously-stored "+" (all regions, now removed) falls back to default. */
+    /** Selected region IATA code, or "+" for all regions (subscribes to every region's topic). */
     var region: String
-        get() = (prefs.getString(KEY_REGION, DEFAULT_REGION) ?: DEFAULT_REGION).let { if (it == "+") DEFAULT_REGION else it }
+        get() = prefs.getString(KEY_REGION, DEFAULT_REGION) ?: DEFAULT_REGION
         set(v) { prefs.edit().putString(KEY_REGION, v.trim()).apply() }
 
     /**
@@ -61,6 +61,7 @@ class MqttPrefs(context: Context) {
 
         /** Selectable regions as (city, IATA). */
         val REGIONS: List<Pair<String, String>> = listOf(
+            "All" to "+",
             "Toronto" to "YYZ",
             "Vancouver" to "YVR",
             "Montréal" to "YUL",

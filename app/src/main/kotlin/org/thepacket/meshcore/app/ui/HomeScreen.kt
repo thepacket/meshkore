@@ -76,6 +76,7 @@ import org.thepacket.meshcore.app.PublicChannel
 import org.thepacket.meshcore.app.ObservedChannel
 import org.thepacket.meshcore.app.RegionChannels
 import org.thepacket.meshcore.app.regionLabel
+import org.thepacket.meshcore.app.regionMatches
 import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
@@ -156,7 +157,7 @@ private fun AllContactsList(
     val region by session.region.collectAsStateWithLifecycle()
     val home by session.homeRegion.collectAsStateWithLifecycle()
     val regionScoped = remember(allContacts, region, home) {
-        allContacts.filter { regionOf(it.region, home) == region }
+        allContacts.filter { regionMatches(region, regionOf(it.region, home)) }
     }
 
     // Toast the outcome of a push once it completes.
@@ -639,7 +640,7 @@ private fun ObservedChannelsList(
     var removing by remember { mutableStateOf<ObservedChannel?>(null) }
 
     val channels = remember(all, region) {
-        all.filter { it.region == region }.sortedBy { it.displayName.lowercase() }
+        all.filter { regionMatches(region, it.region) }.sortedBy { it.displayName.lowercase() }
     }
 
     Column(Modifier.fillMaxSize()) {
