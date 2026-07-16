@@ -51,6 +51,8 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
 
     private var brokers: List<Broker> = emptyList()
     @Volatile private var activeIndex = 0
+    /** Consecutive CONNECT auth refusals; reset on a successful subscribe. Bounds retrying genuinely bad creds. */
+    @Volatile private var authFailures = 0
 
     private fun parseBroker(url: String): Broker {
         val uri = URI(url.trim())
@@ -72,6 +74,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
             brokers = urls.map(::parseBroker)
             if (brokers.isEmpty()) error("no broker")
             activeIndex = startIndex.coerceIn(brokers.indices)
+            authFailures = 0
             // Keep accumulated per-broker counts across reconnects; (re)size if the broker list changed.
             if (_fromBroker.value.size != brokers.size) _fromBroker.value = List(brokers.size) { 0L }
             val b = brokers[activeIndex]
@@ -113,19 +116,41 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
         _disconnections.value++
         val msg = ctx.cause.message ?: "disconnected"
         Log.w(TAG, "disconnected (${ctx.source}): $msg")
-        if (msg.contains("NOT_AUTHORIZED", ignoreCase = true) ||
+
+        val authRefused = msg.contains("NOT_AUTHORIZED", ignoreCase = true) ||
             msg.contains("not authorized", ignoreCase = true) ||
             msg.contains("BAD_USER_NAME", ignoreCase = true)
-        ) {
-            // Bad/expired credentials won't fix themselves — stop retrying, surface clearly.
-            ctx.reconnector.reconnect(false)
-            _status.value = MqttStatus.Error("Not authorized — check username/token (it may have expired)")
+
+        if (authRefused) {
+            // In MQTT 3.1.1 an auth failure can only arrive in the CONNACK, so this is a refused *reconnect*,
+            // not the broker kicking a live session. The public meshcore.ca brokers use device-signing auth
+            // that fails closed: a CONNECT is refused (code 5) transiently even with valid credentials. So
+            // don't treat one refusal as fatal — retry (and fail over to the other broker) with a longer
+            // backoff, giving up only once refusals persist, which is what a genuinely bad/expired token
+            // looks like.
+            authFailures++
+            if (authFailures >= MAX_AUTH_FAILURES) {
+                ctx.reconnector.reconnect(false)
+                _status.value = MqttStatus.Error("Not authorized — check username/token (it may have expired)")
+                return
+            }
+            Log.w(TAG, "auth refused ($authFailures/$MAX_AUTH_FAILURES) — retrying")
+            _status.value = MqttStatus.Connecting
+            scheduleReconnect(ctx, AUTH_RETRY_DELAY_MS)
             return
         }
+
         _status.value = MqttStatus.Error(msg)
-        // Reconnect after a short delay; when we have more than one broker, move to the next one so a
-        // broker outage carries the feed to a healthy server instead of retrying the dead one forever.
-        val recon = ctx.reconnector.reconnect(true).delay(RECONNECT_DELAY_MS, TimeUnit.MILLISECONDS)
+        scheduleReconnect(ctx, RECONNECT_DELAY_MS)
+    }
+
+    /**
+     * Reconnect after [delayMs]; when we have more than one broker, move to the next one so a broker
+     * outage (or a transient auth refusal) carries the feed to the other server instead of retrying the
+     * same one forever.
+     */
+    private fun scheduleReconnect(ctx: MqttClientDisconnectedContext, delayMs: Long) {
+        val recon = ctx.reconnector.reconnect(true).delay(delayMs, TimeUnit.MILLISECONDS)
         if (brokers.size > 1) {
             activeIndex = (activeIndex + 1) % brokers.size
             _brokerChanges.value++
@@ -160,7 +185,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
             .send()
             .whenComplete { _: Mqtt3SubAck?, ex: Throwable? ->
                 if (ex != null) { Log.w(TAG, "subscribe failed", ex); _status.value = MqttStatus.Error("subscribe failed") }
-                else _status.value = MqttStatus.Connected(topic)
+                else { authFailures = 0; _status.value = MqttStatus.Connected(topic) }
             }
     }
 
@@ -188,5 +213,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     private companion object {
         const val TAG = "MqttSource"
         const val RECONNECT_DELAY_MS = 3000L // wait before each reconnect/failover attempt
+        const val AUTH_RETRY_DELAY_MS = 5000L // device-signing auth refuses transiently; back off longer before retrying
+        const val MAX_AUTH_FAILURES = 5 // consecutive CONNECT refusals before surfacing a hard bad-token error
     }
 }
