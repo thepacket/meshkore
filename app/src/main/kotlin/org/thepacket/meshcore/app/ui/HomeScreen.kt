@@ -250,7 +250,9 @@ private fun AllContactsList(
                         icon = if (c.isRepeater) Icons.Default.Router else Icons.Default.Person,
                         tint = nameColor(c.name.ifBlank { c.keyPrefixHex }),
                         title = c.name.ifBlank { c.keyPrefixHex },
-                        subtitle = contactTypeLabel(c.type) + if (onDevice) " · on device" else "",
+                        subtitle = contactTypeLabel(c.type) +
+                            " · " + regionLabel(regionOf(c.region, home)) +
+                            if (onDevice) " · on device" else "",
                         onClick = { detail = c },
                         onLongClick = { detail = c },
                     )

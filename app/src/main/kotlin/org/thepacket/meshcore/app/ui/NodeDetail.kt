@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.app.haversineKm
+import org.thepacket.meshcore.app.regionLabel
 import org.thepacket.meshcore.protocol.AdvertPathInfo
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.MmaReading
@@ -124,7 +125,7 @@ fun NodeDetailSheet(
                 heard?.snrDb?.let { kvRow("SNR", "$it dB") }
                 heard?.rssi?.let { kvRow("RSSI", "$it dBm") }
                 heard?.let { kvRow("Last heard", relAge(it.lastHeardMs)) }
-                contact?.region?.let { kvRow("Region", it) }
+                contact?.region?.let { kvRow("Region", regionLabel(it)) }
                 contact?.let { if (it.lastAdvert > 0) kvRow("Last advert", epochStr(it.lastAdvert)) }
                 contact?.let {
                     kvRow("Path", if (it.outPathLen in 0..63) "${it.outPathLen} hop(s)" else "flood / unknown")
