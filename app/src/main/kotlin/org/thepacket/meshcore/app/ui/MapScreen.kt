@@ -101,10 +101,13 @@ fun MapContent(
                 // them: reschedule a single rebuild once motion settles. Markers still pan and zoom with
                 // the map in the meantime (they're geo-anchored); only the cluster grouping is deferred.
                 val rebuild = Runnable { rebuildOverlays(map, holder, nodeIcons, clusterIcons, badgeIcons) }
+                holder.rebuild = rebuild
                 // A single coalescing entry point for both gesture- and data-driven rebuilds: under the
                 // all-regions feed the node list churns constantly, so debouncing here stops a rebuild (and
                 // full redraw) firing on every recomposition, which was pinning the CPU.
                 holder.requestRebuild = { map.removeCallbacks(rebuild); map.postDelayed(rebuild, REBUILD_DEBOUNCE_MS) }
+                // Once the map is measured, do the first cluster pass (earlier rebuilds bail on width==0).
+                map.addOnFirstLayoutListener { _, _, _, _, _ -> holder.requestRebuild() }
                 map.addMapListener(object : MapListener {
                     override fun onScroll(event: ScrollEvent?): Boolean {
                         map.removeCallbacks(rebuild); map.postDelayed(rebuild, REBUILD_DEBOUNCE_MS); return false
@@ -118,11 +121,9 @@ fun MapContent(
             update = { map ->
                 // Only rebuild when the node set actually changed (remember() hands back the same list
                 // instance otherwise), and do it through the debounce — recompositions from the packet
-                // feed no longer force a synchronous re-cluster + redraw.
-                if (nodes !== holder.renderedNodes) {
-                    holder.renderedNodes = nodes
-                    holder.requestRebuild()
-                }
+                // feed no longer force a synchronous re-cluster + redraw. renderedNodes is advanced inside
+                // rebuildOverlays on success, so a rebuild that bails (map not yet laid out) is retried.
+                if (nodes !== holder.renderedNodes) holder.requestRebuild()
                 val f = holder.focus
                 if (f != null && f != holder.appliedFocus) {
                     map.controller.setCenter(GeoPoint(f.first, f.second))
@@ -136,7 +137,10 @@ fun MapContent(
                     holder.centered = true
                 }
             },
-            onRelease = { it.onDetach() },
+            onRelease = { map ->
+                holder.rebuild?.let { map.removeCallbacks(it) } // drop any pending rebuild before teardown
+                map.onDetach()
+            },
         )
 
         if (nodes.isEmpty()) {
@@ -169,6 +173,8 @@ private class MapHolder {
     var renderedNodes: List<MapNode>? = null
     // Debounced rebuild trigger, wired up in the AndroidView factory (coalesces data + gesture updates).
     var requestRebuild: () -> Unit = {}
+    // The pending rebuild Runnable, so onRelease can cancel it before the MapView is detached.
+    var rebuild: Runnable? = null
     var centered = false
     var focus: Pair<Double, Double>? = null
     var appliedFocus: Pair<Double, Double>? = null
@@ -216,7 +222,12 @@ private fun rebuildOverlays(
     clusterIcons: MutableMap<Int, Drawable>,
     badgeIcons: MutableMap<String, Drawable>,
 ) {
+    // A debounced rebuild can fire after the map is torn down (e.g. switching tools) or before it's laid
+    // out — operating on the projection/overlays then crashes. Bail while detached or unmeasured; a later
+    // gesture/data change re-triggers once the view is live again.
+    if (!map.isAttachedToWindow || map.width == 0 || map.height == 0) return
     val allNodes = holder.nodes
+    holder.renderedNodes = allNodes // committed to rendering this set; a bailed rebuild (above) leaves it stale to retry
     map.overlays.clear()
     if (allNodes.isEmpty()) { map.invalidate(); return }
 
