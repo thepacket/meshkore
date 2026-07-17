@@ -24,13 +24,13 @@ import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.ScatterPlot
@@ -111,6 +111,7 @@ fun ToolsContent(
             "rawdata" -> RawDataTool(session, contacts, ::notify) { open = null }
             "topology" -> MeshTopologyScreen(session, onShowOnMap) { open = null }
             "talkers" -> AnalyticsTool("Top Talkers", { open = null }) { TopTalkersCard(session) }
+            "regions" -> AnalyticsTool("Top Regions", { open = null }) { TopRegionsCard(session) }
             "msgtypes" -> AnalyticsTool("Message Types", { open = null }) { MessageTypeCard(session) }
             "snr" -> AnalyticsTool("SNR Distribution", { open = null }) { SnrDistributionCard(session) }
             "rssi" -> AnalyticsTool("RSSI Distribution", { open = null }) { RssiDistributionCard(session) }
@@ -166,14 +167,14 @@ fun ToolsContent(
                 }
                 ToolRow(Icons.Default.Person, "Top Talkers",
                     "Busiest packet sources by count and airtime.") { open = "talkers" }
+                ToolRow(Icons.Default.Public, "Top Regions",
+                    "Busiest regions (city + IATA) by packets collected.") { open = "regions" }
                 ToolRow(Icons.Default.DataObject, "Message Types",
                     "Distribution of packets by payload type.") { open = "msgtypes" }
                 ToolRow(Icons.Default.BarChart, "SNR Distribution",
                     "Signal-to-noise histogram across received packets.") { open = "snr" }
                 ToolRow(Icons.Default.SignalCellularAlt, "RSSI Distribution",
                     "Received-signal-strength histogram across received packets.") { open = "rssi" }
-                ToolRow(Icons.Default.ShowChart, "Signal Quality",
-                    "Average SNR trend and packet volume over time.") { open = "sigquality" }
                 ToolRow(Icons.Default.ScatterPlot, "SNR vs RSSI",
                     "Scatter of every packet by SNR and RSSI, over link-quality zones.") { open = "scatter" }
                 ToolRow(Icons.Default.Timeline, "Hop Count",

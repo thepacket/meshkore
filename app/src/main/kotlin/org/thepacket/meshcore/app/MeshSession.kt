@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlin.random.Random
@@ -248,6 +249,15 @@ class MeshSession(
             else m[r] ?: emptyList()
         }
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * Packet count per region across everything collected — spans all regions regardless of the
+     * selected view, so the Top Regions chart is meaningful even in a single-region view. Bounded by
+     * the per-region history cap. Keys are resolved regions (concrete code, home, or [HOME_UNSET]).
+     */
+    val regionCounts: StateFlow<Map<String, Int>> =
+        _historyByRegion.map { m -> m.mapValues { it.value.size } }
+            .stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     private fun addToHistory(log: RxLog) {
         val r = regionOf(log.region, _homeRegion.value)

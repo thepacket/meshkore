@@ -52,6 +52,7 @@ import org.thepacket.meshcore.app.MeshConnection
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.MqttPrefs
+import org.thepacket.meshcore.app.regionLabel
 import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
@@ -263,7 +264,7 @@ internal fun TopTalkersCard(session: MeshSession) {
                 return@Column
             }
             val maxCount = talkers.first().count
-            talkers.forEach { t -> TalkerRow(t.label, t.count, maxCount, t.airtimeMs) }
+            talkers.forEachIndexed { i, t -> TalkerRow(t.label, t.count, maxCount, t.airtimeMs, chartColor(i)) }
         }
     }
 }
@@ -287,10 +288,52 @@ internal fun MessageTypeCard(session: MeshSession) {
             val byType = history.groupingBy { it.payloadType }.eachCount().entries
                 .sortedByDescending { it.value }
             val max = byType.firstOrNull()?.value ?: 1
-            byType.forEach { (type, c) -> BarRow(PayloadType.name(type), c, count, max) }
+            byType.forEachIndexed { i, (type, c) -> BarRow(PayloadType.name(type), c, count, max, chartColor(i)) }
         }
     }
 }
+
+/** Top regions by packet count over the persisted history, across every region (not just the view). */
+@Composable
+internal fun TopRegionsCard(session: MeshSession) {
+    val counts by session.regionCounts.collectAsStateWithLifecycle()
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Top Regions", style = MaterialTheme.typography.titleMedium)
+            Text("Busiest regions by packets collected",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+            if (counts.isEmpty()) {
+                Text("No packets yet.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                return@Column
+            }
+            val ranked = counts.entries.sortedByDescending { it.value }.take(10)
+            val total = counts.values.sum()
+            val max = ranked.firstOrNull()?.value ?: 1
+            ranked.forEachIndexed { i, (code, c) ->
+                // "Ottawa (YOW)" for known regions; a bare code for regions we don't have a name for.
+                val name = regionLabel(code)
+                BarRow(if (name == code) code else "$name ($code)", c, total, max, chartColor(i))
+            }
+        }
+    }
+}
+
+/** Cycling palette for multi-colour bar charts, so adjacent bars read as distinct. */
+private val CHART_PALETTE = listOf(
+    Color(0xFF60A5FA), // blue
+    Color(0xFF4ADE80), // green
+    Color(0xFFA78BFA), // purple
+    Color(0xFFFBBF24), // amber
+    Color(0xFFF87171), // red
+    Color(0xFF22D3EE), // cyan
+    Color(0xFFF472B6), // pink
+    Color(0xFFA3E635), // lime
+)
+
+/** Palette colour for bar index [i], wrapping around the palette. */
+private fun chartColor(i: Int): Color = CHART_PALETTE[i.mod(CHART_PALETTE.size)]
 
 private data class TalkerAgg(val label: String, val count: Int, val airtimeMs: Double)
 
@@ -300,7 +343,7 @@ private fun sourceByte(p: ParsedPacket): Int? =
 
 /** A top-talker bar: proportional to packet count, with count + airtime on the right. */
 @Composable
-private fun TalkerRow(label: String, count: Int, maxCount: Int, airtimeMs: Double) {
+private fun TalkerRow(label: String, count: Int, maxCount: Int, airtimeMs: Double, color: Color) {
     val frac = if (maxCount > 0) count.toFloat() / maxCount else 0f
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -313,7 +356,7 @@ private fun TalkerRow(label: String, count: Int, maxCount: Int, airtimeMs: Doubl
             Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
         ) {
-            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(MaterialTheme.colorScheme.tertiary))
+            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(color))
         }
     }
 }
@@ -323,7 +366,7 @@ private fun TalkerRow(label: String, count: Int, maxCount: Int, airtimeMs: Doubl
  * scaled to [max] (the largest value in the set) so the top row fills the width.
  */
 @Composable
-private fun BarRow(label: String, value: Int, total: Int, max: Int = total) {
+private fun BarRow(label: String, value: Int, total: Int, max: Int = total, color: Color = CHART_PALETTE[0]) {
     val frac = if (max > 0) value.toFloat() / max else 0f
     val pct = if (total > 0) value * 100 / total else 0
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -336,7 +379,7 @@ private fun BarRow(label: String, value: Int, total: Int, max: Int = total) {
             Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
         ) {
-            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
+            Box(Modifier.fillMaxWidth(frac).fillMaxHeight().background(color))
         }
     }
 }
@@ -419,7 +462,7 @@ private fun NoiseGraph(history: List<Int>, modifier: Modifier) {
     }
 }
 
-/** SNR histogram over the RX history (higher = cleaner signal), green bars. */
+/** SNR histogram over the RX history (higher = cleaner signal). */
 @Composable
 internal fun SnrDistributionCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
@@ -428,13 +471,12 @@ internal fun SnrDistributionCard(session: MeshSession) {
         title = "SNR Distribution",
         subtitle = "Signal-to-Noise Ratio (higher = cleaner signal)",
         stats = stats,
-        barColor = MaterialTheme.colorScheme.secondary,
         sdUnit = "dB",
         fmt = { "%.1f dB".format(it) },
     )
 }
 
-/** RSSI histogram over the RX history (closer to 0 = stronger), blue bars. */
+/** RSSI histogram over the RX history (closer to 0 = stronger). */
 @Composable
 internal fun RssiDistributionCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
@@ -443,7 +485,6 @@ internal fun RssiDistributionCard(session: MeshSession) {
         title = "RSSI Distribution",
         subtitle = "Received Signal Strength (closer to 0 = stronger)",
         stats = stats,
-        barColor = Color(0xFF60A5FA),
         sdUnit = "dBm",
         fmt = { "%.0f dBm".format(it) },
     )
@@ -633,7 +674,7 @@ internal fun PacketSizeCard(session: MeshSession) {
             Text("peak ${stats.counts.max()} / bin · ${stats.count} samples",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            DistributionHistogram(stats.counts, Color(0xFF8B5CF6), Modifier.fillMaxWidth().height(140.dp))
+            DistributionHistogram(stats.counts, Modifier.fillMaxWidth().height(140.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 listOf(stats.min, (stats.min + stats.max) / 2, stats.max).forEach {
                     Text("%.1f".format(it), style = MaterialTheme.typography.labelSmall,
@@ -667,7 +708,7 @@ internal fun HopCountDistributionCard(session: MeshSession) {
                 return@Column
             }
             if (stats.counts.isNotEmpty()) {
-                DistributionHistogram(stats.counts, Color(0xFF60A5FA), Modifier.fillMaxWidth().height(140.dp))
+                DistributionHistogram(stats.counts, Modifier.fillMaxWidth().height(140.dp))
                 // Integer hop-count axis: 1, midpoint, max.
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     listOf(1, (1 + stats.maxHop) / 2, stats.maxHop).forEach {
@@ -792,7 +833,7 @@ internal fun TopRepeatersCard(session: MeshSession) {
                 return@Column
             }
             val maxCount = top.first().count
-            top.forEach { RankBarRow(it.label, "%,d".format(it.count), it.count.toFloat() / maxCount, Color(0xFF60A5FA)) }
+            top.forEachIndexed { i, it -> RankBarRow(it.label, "%,d".format(it.count), it.count.toFloat() / maxCount, chartColor(i)) }
         }
     }
 }
@@ -804,8 +845,13 @@ internal fun TopRepeatersCard(session: MeshSession) {
 @Composable
 internal fun TopSendersCard(session: MeshSession) {
     val history by session.packetHistory.collectAsStateWithLifecycle()
-    val channels by session.channels.collectAsStateWithLifecycle()
-    val top = remember(history, channels) {
+    val deviceChannels by session.channels.collectAsStateWithLifecycle()
+    val observed by session.observedChannels.collectAsStateWithLifecycle()
+    val top = remember(history, deviceChannels, observed) {
+        // Decrypt with device slots AND followed (read-only) channels — otherwise every post reads as
+        // Anonymous when running MQTT-only, or reading channels the connected device doesn't hold.
+        val channels = deviceChannels +
+            observed.map { ChannelEntry(index = -1, name = it.displayName, secret = it.secret) }
         val counts = HashMap<String, Int>()
         for (pkt in history) {
             val p = PacketInspector.parse(pkt.raw)
@@ -827,7 +873,7 @@ internal fun TopSendersCard(session: MeshSession) {
                 return@Column
             }
             val maxCount = top.first().count
-            top.forEach { RankBarRow(it.label, "${it.count} msgs", it.count.toFloat() / maxCount, Color(0xFF8B5CF6)) }
+            top.forEachIndexed { i, it -> RankBarRow(it.label, "${it.count} msgs", it.count.toFloat() / maxCount, chartColor(i)) }
         }
     }
 }
@@ -1002,7 +1048,7 @@ internal fun HopDistanceCard(session: MeshSession) {
             Text("peak ${stats.counts.max()} / bin · ${stats.count} legs",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            DistributionHistogram(stats.counts, Color(0xFF4ADE80), Modifier.fillMaxWidth().height(140.dp))
+            DistributionHistogram(stats.counts, Modifier.fillMaxWidth().height(140.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 listOf(stats.min, (stats.min + stats.max) / 2, stats.max).forEach {
                     Text("%.1f".format(it), style = MaterialTheme.typography.labelSmall,
@@ -1130,7 +1176,6 @@ private fun DistributionCard(
     title: String,
     subtitle: String,
     stats: DistStats?,
-    barColor: androidx.compose.ui.graphics.Color,
     sdUnit: String,
     fmt: (Double) -> String,
 ) {
@@ -1147,7 +1192,7 @@ private fun DistributionCard(
             Text("peak ${stats.counts.max()} / bin · ${stats.count} samples",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-            DistributionHistogram(stats.counts, barColor, Modifier.fillMaxWidth().height(140.dp))
+            DistributionHistogram(stats.counts, Modifier.fillMaxWidth().height(140.dp))
             // Axis reference: low, midpoint, high edge of the binned range.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 listOf(stats.min, (stats.min + stats.max) / 2, stats.max).forEach {
@@ -1170,7 +1215,6 @@ private fun DistributionCard(
 @Composable
 private fun DistributionHistogram(
     counts: IntArray,
-    barColor: androidx.compose.ui.graphics.Color,
     modifier: Modifier,
 ) {
     val grid = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
@@ -1183,7 +1227,7 @@ private fun DistributionHistogram(
         val slot = size.width / counts.size
         counts.forEachIndexed { i, c ->
             val bh = size.height * (c.toFloat() / maxC)
-            drawRect(barColor, topLeft = Offset(i * slot + slot * 0.1f, size.height - bh),
+            drawRect(chartColor(i), topLeft = Offset(i * slot + slot * 0.1f, size.height - bh),
                 size = Size(slot * 0.8f, bh))
         }
     }
