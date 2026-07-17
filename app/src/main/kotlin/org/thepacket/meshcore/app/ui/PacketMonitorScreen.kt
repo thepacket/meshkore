@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -134,6 +135,16 @@ fun PacketMonitorContent(
         }
     }
 
+    val listState = rememberLazyListState()
+    // Follow the tail: keep the newest packet (index 0, since the feed is newest-first) in view as
+    // packets arrive. Keyed on the newest row's identity so it re-scrolls whenever a new one lands.
+    var autoScroll by remember { mutableStateOf(true) }
+    val newestKey = if (groupByHash) groups.firstOrNull()?.hash
+        else filtered.firstOrNull()?.let { System.identityHashCode(it) }
+    LaunchedEffect(newestKey, autoScroll) {
+        if (autoScroll && newestKey != null) listState.animateScrollToItem(0)
+    }
+
     Column(modifier.fillMaxSize()) {
         if (packets.isNotEmpty()) {
             Row(
@@ -143,6 +154,8 @@ fun PacketMonitorContent(
             ) {
                 Checkbox(checked = groupByHash, onCheckedChange = onGroupByHashChange)
                 Text("Group by hash", style = MaterialTheme.typography.bodyMedium)
+                Checkbox(checked = autoScroll, onCheckedChange = { autoScroll = it })
+                Text("Auto-scroll", style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.weight(1f))
                 OutlinedButton(onClick = { showFilters = true }) {
                     Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp),
@@ -164,6 +177,7 @@ fun PacketMonitorContent(
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
+                state = listState,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
