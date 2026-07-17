@@ -10,9 +10,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,7 +38,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -186,9 +190,11 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
                 style = MaterialTheme.typography.bodySmall)
             RegionCard(ctx, session)
             SectionCard("Global Contacts") {
-                ToolButton("Export all") { exportGlobalContacts.launch("meshcore-global-contacts.json") }
-                ToolButton("Import all") { importGlobalContacts.launch(arrayOf("application/json")) }
-                ToolButton("Delete all", danger = true) { showClearGlobal = true }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolButton("Export", modifier = Modifier.weight(1f)) { exportGlobalContacts.launch("meshcore-global-contacts.json") }
+                    ToolButton("Import", modifier = Modifier.weight(1f)) { importGlobalContacts.launch(arrayOf("application/json")) }
+                    ToolButton("Delete", danger = true, modifier = Modifier.weight(1f)) { showClearGlobal = true }
+                }
             }
             MqttCard(ctx)
         }
@@ -200,31 +206,34 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
     }
 
     Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // ---- Region (global: MQTT subscription + device push scope) ----
         RegionCard(ctx, session)
 
         // ---- Global Contacts (the aggregate address book) ----
         SectionCard("Global Contacts") {
-            ToolButton("Export all") { exportGlobalContacts.launch("meshcore-global-contacts.json") }
-            ToolButton("Import all") { importGlobalContacts.launch(arrayOf("application/json")) }
-            ToolButton("Delete all", danger = true) { showClearGlobal = true }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ToolButton("Export", modifier = Modifier.weight(1f)) { exportGlobalContacts.launch("meshcore-global-contacts.json") }
+                ToolButton("Import", modifier = Modifier.weight(1f)) { importGlobalContacts.launch(arrayOf("application/json")) }
+                ToolButton("Delete", danger = true, modifier = Modifier.weight(1f)) { showClearGlobal = true }
+            }
         }
 
         // ---- Device contacts ----
         SectionCard("Device contacts") {
-            ToolButton("Export all") { exportDeviceContacts.launch("meshcore-device-contacts.json") }
-            ToolButton("Import all") { importDeviceContacts.launch(arrayOf("application/json")) }
-            ToolButton("Delete all", danger = true) { showClearDevice = true }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ToolButton("Export", modifier = Modifier.weight(1f)) { exportDeviceContacts.launch("meshcore-device-contacts.json") }
+                ToolButton("Import", modifier = Modifier.weight(1f)) { importDeviceContacts.launch(arrayOf("application/json")) }
+                ToolButton("Delete", danger = true, modifier = Modifier.weight(1f)) { showClearDevice = true }
+            }
         }
 
         // ---- Identity ----
         var name by remember(self) { mutableStateOf(self.name) }
         SectionCard("Identity") {
             Field("Node name", name) { name = it }
-            SaveRow { session.applyNodeName(name) }
         }
 
         // ---- Notifications ----
@@ -290,15 +299,6 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                 )
             }
-            SaveRow {
-                val fq = freq.toDoubleOrNull()
-                when {
-                    fq == null -> toast(ctx, "Radio: invalid frequency")
-                    repeat && allowedRepeat.isNotEmpty() && !repeatAllowedHere ->
-                        toast(ctx, "Client-repeat needs an allowed frequency (${formatFreqRanges(allowedRepeat)})")
-                    else -> session.applyRadio(fq, bwList[bwIdx], sfIdx + 5, crIdx + 5, repeat)
-                }
-            }
         }
 
         // ---- TX power (up to 30 dBm; the radio rejects above its hardware max) ----
@@ -307,7 +307,6 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             Text("${tx.toInt()} dBm    (hardware max ${self.maxTxPower})",
                 style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
             Slider(value = tx, onValueChange = { tx = it }, valueRange = -9f..30f, steps = 38)
-            SaveRow { session.applyTxPower(tx.toInt()) }
         }
 
         // ---- Position ----
@@ -333,14 +332,7 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             OutlinedButton(onClick = { useCurrentLocation() }, modifier = Modifier.fillMaxWidth()) {
                 Text("Use current location")
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                OutlinedButton(onClick = { showPicker = true }) { Text("Pick on map") }
-                Button(onClick = {
-                    val la = lat.toDoubleOrNull(); val lo = lon.toDoubleOrNull()
-                    if (la != null && lo != null) session.applyPosition((la * 1e6).toInt(), (lo * 1e6).toInt())
-                    else toast(ctx, "Position: invalid number")
-                }) { Text("Save") }
-            }
+            OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) { Text("Pick on map") }
         }
         if (showPicker) MapPickerDialog(
             initialLat = lat.toDoubleOrNull(), initialLon = lon.toDoubleOrNull(),
@@ -362,9 +354,6 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             EnumDropdown("Telemetry — base", TELEM, telBase) { telBase = it }
             EnumDropdown("Telemetry — location", TELEM, telLoc) { telLoc = it }
             EnumDropdown("Telemetry — environment", TELEM, telEnv) { telEnv = it }
-            SaveRow {
-                session.applyOtherParams(manualAdd, telBase, telLoc, telEnv, shareLoc, multiAcks.toIntOrNull() ?: 0)
-            }
         }
 
         // ---- Auto-add ----
@@ -381,15 +370,6 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             SwitchRow("Sensors", aaSensor) { aaSensor = it }
             SwitchRow("Overwrite oldest when full", aaOverwrite) { aaOverwrite = it }
             Field("Max hops (0 = unlimited)", maxHops) { maxHops = it }
-            SaveRow {
-                var flags = 0
-                if (aaChat) flags = flags or AutoAdd.CHAT
-                if (aaRep) flags = flags or AutoAdd.REPEATER
-                if (aaRoom) flags = flags or AutoAdd.ROOM
-                if (aaSensor) flags = flags or AutoAdd.SENSOR
-                if (aaOverwrite) flags = flags or AutoAdd.OVERWRITE_OLDEST
-                session.applyAutoAdd(flags, maxHops.toIntOrNull() ?: 0)
-            }
         }
 
         // ---- Contacts pushed to device (app-local; the observed book collects everything) ----
@@ -415,10 +395,6 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         SectionCard("Tuning") {
             Field("RX-delay base", rxDelay) { rxDelay = it }
             Field("Airtime factor", airtime) { airtime = it }
-            SaveRow {
-                val rx = rxDelay.toDoubleOrNull(); val af = airtime.toDoubleOrNull()
-                if (rx != null && af != null) session.applyTuning(rx, af) else toast(ctx, "Tuning: invalid number")
-            }
         }
 
         // ---- Experimental ----
@@ -432,7 +408,6 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
             EnumDropdown("Path-hash size", listOf("1-byte", "2-byte", "3-byte"), pathHash) { pathHash = it }
-            SaveRow { session.applyPathHashMode(pathHash) }
         }
 
         // ---- Device variables (firmware custom vars / sensor settings) ----
@@ -477,13 +452,15 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
 
         // ---- Extra tools ----
         SectionCard("Extra tools") {
-            ToolButton("Export config") { exportConfig.launch("meshcore-config.json") }
-            ToolButton("Import config") { importConfig.launch(arrayOf("application/json")) }
-            ToolButton("Export app data") { exportAppData.launch("meshcore-appdata.json") }
-            ToolButton("Purge local data") { showPurge = true }
-            ToolButton("Debug logs") { showLogs = true }
-            ToolButton("Reboot device") { showReboot = true }
-            ToolButton("Factory reset", danger = true) { showFactory = true }
+            ButtonGrid(listOf(
+                Tool("Export config") { exportConfig.launch("meshcore-config.json") },
+                Tool("Import config") { importConfig.launch(arrayOf("application/json")) },
+                Tool("Export app data") { exportAppData.launch("meshcore-appdata.json") },
+                Tool("Purge local data") { showPurge = true },
+                Tool("Debug logs") { showLogs = true },
+                Tool("Reboot device") { showReboot = true },
+                Tool("Factory reset", danger = true) { showFactory = true },
+            ))
         }
 
         // ---- Identity (advanced) ----
@@ -495,8 +472,10 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
-            ToolButton("Export private key") { showExportKeyWarn = true }
-            ToolButton("Import private key") { showImportKey = true }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ToolButton("Export key", modifier = Modifier.weight(1f)) { showExportKeyWarn = true }
+                ToolButton("Import key", modifier = Modifier.weight(1f)) { showImportKey = true }
+            }
         }
 
         // ---- Pairing PIN ----
@@ -573,6 +552,51 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
                 Button(onClick = { session.syncTimeFromPhone() }) { Text("Sync now") }
             }
         }
+
+        // Auto-save on leaving Settings (the tab is disposed): apply each device-config section the user
+        // actually changed — no per-section Save buttons. Kept current via rememberUpdatedState so onDispose
+        // reads the latest edits; the change-detection guards avoid re-sending unchanged params to the radio.
+        val saveOnExit by rememberUpdatedState {
+            if (name != self.name) session.applyNodeName(name)
+
+            val fq = freq.toDoubleOrNull()
+            val repeatOk = fq != null && (!repeat || allowedRepeat.isEmpty() ||
+                allowedRepeat.any { (fq * 1000).toLong() in it })
+            val radioChanged = fq != null && (fq != self.freqMhz || bwList[bwIdx] != self.bwKhz ||
+                sfIdx + 5 != self.radioSf || crIdx + 5 != self.radioCr ||
+                repeat != (deviceInfo?.clientRepeat ?: false))
+            if (radioChanged && repeatOk) session.applyRadio(fq!!, bwList[bwIdx], sfIdx + 5, crIdx + 5, repeat)
+
+            if (tx.toInt() != self.txPower) session.applyTxPower(tx.toInt())
+
+            val la = lat.toDoubleOrNull(); val lo = lon.toDoubleOrNull()
+            if (la != null && lo != null) {
+                val laE6 = (la * 1e6).toInt(); val loE6 = (lo * 1e6).toInt()
+                if (laE6 != self.advLat || loE6 != self.advLon) session.applyPosition(laE6, loE6)
+            }
+
+            val netChanged = manualAdd != ((self.manualAddContacts and 1) == 1) ||
+                shareLoc != (self.advertLocPolicy == 1) ||
+                (multiAcks.toIntOrNull() ?: 0) != self.multiAcks ||
+                telBase != self.telemetryModeBase || telLoc != self.telemetryModeLoc || telEnv != self.telemetryModeEnv
+            if (netChanged) session.applyOtherParams(manualAdd, telBase, telLoc, telEnv, shareLoc, multiAcks.toIntOrNull() ?: 0)
+
+            var aaFlags = 0
+            if (aaChat) aaFlags = aaFlags or AutoAdd.CHAT
+            if (aaRep) aaFlags = aaFlags or AutoAdd.REPEATER
+            if (aaRoom) aaFlags = aaFlags or AutoAdd.ROOM
+            if (aaSensor) aaFlags = aaFlags or AutoAdd.SENSOR
+            if (aaOverwrite) aaFlags = aaFlags or AutoAdd.OVERWRITE_OLDEST
+            val hops = maxHops.toIntOrNull() ?: 0
+            if (aaFlags != (autoAdd?.flags ?: 0) || hops != (autoAdd?.maxHops ?: 0)) session.applyAutoAdd(aaFlags, hops)
+
+            val rx = rxDelay.toDoubleOrNull(); val af = airtime.toDoubleOrNull()
+            if (rx != null && af != null && (rx != (tuning?.rxDelayBase ?: 0.0) || af != (tuning?.airtimeFactor ?: 0.0)))
+                session.applyTuning(rx, af)
+
+            if (pathHash != (deviceInfo?.pathHashMode?.coerceIn(0, 2) ?: 0)) session.applyPathHashMode(pathHash)
+        }
+        DisposableEffect(Unit) { onDispose { saveOnExit() } }
     }
 
     ConfirmDialog(showReboot, "Reboot device", "Reboot the connected device now?", "Reboot",
@@ -758,10 +782,17 @@ private fun MqttCard(ctx: Context) {
             is MqttStatus.Error -> "Error: ${s.message}"
         }
         KeyVal("Status", statusText)
-        if (enabled) {
-            SaveRow(label = "Apply / reconnect") { save(); MeshConnection.setMqttEnabled(ctx, true) }
+    }
+
+    // No Apply button — leaving Settings persists the username/token and reconnects if they changed. The
+    // broker dropdown and Enabled toggle already apply immediately above.
+    val saveMqttOnExit by rememberUpdatedState {
+        if (user != prefs.username || pass != prefs.password) {
+            save()
+            if (enabled) MeshConnection.setMqttEnabled(ctx, true)
         }
     }
+    DisposableEffect(Unit) { onDispose { saveMqttOnExit() } }
 }
 
 // ---- reusable bits --------------------------------------------------------
@@ -774,12 +805,33 @@ private fun KeyVal(label: String, value: String) {
     }
 }
 
+/** A tool as (label, danger, onClick) for laying [buttons] out in a [columns]-wide grid via [ButtonGrid]. */
+private data class Tool(val label: String, val danger: Boolean = false, val onClick: () -> Unit)
+
+/** Lay [buttons] out as an equal-width grid of [columns]; a short final row keeps its buttons half-width. */
 @Composable
-private fun ToolButton(label: String, danger: Boolean = false, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+private fun ButtonGrid(buttons: List<Tool>, columns: Int = 2) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        buttons.chunked(columns).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { t -> ToolButton(t.label, t.danger, Modifier.weight(1f), t.onClick) }
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) } // pad a short last row
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolButton(label: String, danger: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+    ) {
         Text(
             label,
-            modifier = Modifier.fillMaxWidth(),
+            maxLines = 1,
+            style = MaterialTheme.typography.labelMedium,
             color = if (danger) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
         )
     }
@@ -839,8 +891,8 @@ private fun readText(ctx: android.content.Context, uri: android.net.Uri): String
 @Composable
 private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium,
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
             content()
         }
@@ -903,13 +955,6 @@ private fun EnumDropdown(label: String, options: List<String>, index: Int, onInd
                 DropdownMenuItem(text = { Text(o) }, onClick = { onIndex(i); expanded = false })
             }
         }
-    }
-}
-
-@Composable
-private fun SaveRow(label: String = "Save", onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Button(onClick = onClick) { Text(label) }
     }
 }
 
