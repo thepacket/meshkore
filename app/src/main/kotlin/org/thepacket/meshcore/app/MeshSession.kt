@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlin.random.Random
@@ -112,6 +114,7 @@ class MeshSession(
         const val MAX_CHANNELS = 8 // safety cap when probing channel slots
         const val MAX_PACKETS = 5000 // cap the received raw-data frame list (newest kept, earliest dropped)
         const val MAX_PACKET_HISTORY = 5000 // cap the persisted analytics history
+        const val UI_THROTTLE_MS = 400L // rate-limit heavy per-packet UI flows (~2.5 Hz) under a busy feed
         const val NOISE_HISTORY = 120 // noise-floor samples retained for the graph
         const val TAG = "MeshSession"
     }
@@ -242,8 +245,12 @@ class MeshSession(
      * analytics tool scope to that region automatically and stay bounded however many regions are observed.
      */
     private val _historyByRegion = MutableStateFlow<Map<String, List<RxLog>>>(emptyMap())
+    // The all-regions feed churns _historyByRegion on every packet, and these views (flatten+sort, counts)
+    // are expensive — so sample them to ~UI_THROTTLE_MS instead of recomputing per packet, which was
+    // burning CPU. Region switches still respond immediately: they re-combine against _region directly.
+    @OptIn(FlowPreview::class)
     val packetHistory: StateFlow<List<RxLog>> =
-        combine(_historyByRegion, _region) { m, r ->
+        combine(_historyByRegion.sample(UI_THROTTLE_MS), _region) { m, r ->
             // "All" merges every region's bucket (newest-first, bounded); otherwise show just that region's.
             if (r == ALL_REGIONS) m.values.flatten().sortedByDescending { it.receivedAtMs }.take(MAX_PACKET_HISTORY)
             else m[r] ?: emptyList()
@@ -255,8 +262,9 @@ class MeshSession(
      * selected view, so the Top Regions chart is meaningful even in a single-region view. Bounded by
      * the per-region history cap. Keys are resolved regions (concrete code, home, or [HOME_UNSET]).
      */
+    @OptIn(FlowPreview::class)
     val regionCounts: StateFlow<Map<String, Int>> =
-        _historyByRegion.map { m -> m.mapValues { it.value.size } }
+        _historyByRegion.sample(UI_THROTTLE_MS).map { m -> m.mapValues { it.value.size } }
             .stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     private fun addToHistory(log: RxLog) {
@@ -277,9 +285,11 @@ class MeshSession(
     private val _noiseHistory = MutableStateFlow<List<Int>>(emptyList())
     val noiseHistory: StateFlow<List<Int>> = _noiseHistory.asStateFlow()
 
-    /** Recently-heard stations (most-recent first). */
+    /** Recently-heard stations (most-recent first). Sampled so an advert flood can't recompose per packet. */
     private val _heard = MutableStateFlow<List<HeardEntry>>(emptyList())
-    val heard: StateFlow<List<HeardEntry>> = _heard.asStateFlow()
+    @OptIn(FlowPreview::class)
+    val heard: StateFlow<List<HeardEntry>> =
+        _heard.sample(UI_THROTTLE_MS).stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /** Received raw custom-payload packets (PUSH_CODE_RAW_DATA), newest first, capped. */
     private val _rawData = MutableStateFlow<List<RawDataFrame>>(emptyList())
