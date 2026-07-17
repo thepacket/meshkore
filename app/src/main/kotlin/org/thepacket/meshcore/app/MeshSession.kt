@@ -4,6 +4,7 @@ import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -115,6 +116,7 @@ class MeshSession(
         const val MAX_PACKETS = 5000 // cap the received raw-data frame list (newest kept, earliest dropped)
         const val MAX_PACKET_HISTORY = 5000 // cap the persisted analytics history
         const val UI_THROTTLE_MS = 400L // rate-limit heavy per-packet UI flows (~2.5 Hz) under a busy feed
+        const val INGEST_FLUSH_MS = 250L // coalesce injected packets into one batched history/contact update
         const val NOISE_HISTORY = 120 // noise-floor samples retained for the graph
         const val TAG = "MeshSession"
     }
@@ -459,14 +461,147 @@ class MeshSession(
      * packet feed + persisted history, so the packet monitor and analytics include it. Works with
      * or without a BLE link (the session outlives any single connection).
      */
+    // Injected packets are buffered and flushed in batches (see [flushPackets]). Under the all-regions
+    // feed this turns per-packet copy-on-write updates — each copying the region's history (≤5,000) and
+    // the 1,500-entry contact book — into one coalesced update per [INGEST_FLUSH_MS], slashing CPU/GC.
+    private val pendingPackets = java.util.concurrent.ConcurrentLinkedQueue<RxLog>()
+    @Volatile private var flushJob: Job? = null
+
     fun injectPacket(log: RxLog) {
-        addToHistory(log)
+        pendingPackets.add(log)
+        scheduleFlush()
+    }
+
+    private fun scheduleFlush() {
+        if (flushJob?.isActive == true) return
+        flushJob = scope.launch(Dispatchers.Default) {
+            delay(INGEST_FLUSH_MS)
+            flushPackets()
+        }.also { job ->
+            // If packets landed while we were flushing, make sure they get their own flush.
+            job.invokeOnCompletion { if (pendingPackets.isNotEmpty()) scheduleFlush() }
+        }
+    }
+
+    /** Drain the buffer and apply it with one batched update per concern (history, contacts+heard, chat). */
+    private fun flushPackets() {
+        val batch = ArrayList<RxLog>()
+        while (true) batch.add(pendingPackets.poll() ?: break)
+        if (batch.isEmpty()) return
+
+        addHistoryBatch(batch)
         schedulePacketSave()
-        // An observed ADVERT is a station heard on the air — create/refresh a regional contact and
-        // feed the Heard list, whether it arrived over MQTT or the companion's own radio.
-        if (log.payloadType == PayloadType.ADVERT) ingestAdvert(log)
-        // The same logic for channel chatter: an observed GRP_TXT is a channel message heard on the air.
-        else if (log.payloadType == PayloadType.GRP_TXT) ingestGroupText(log)
+        // An observed ADVERT is a station heard on the air — create/refresh a regional contact and feed
+        // the Heard list. Coalesced across the batch so the contact book and Heard list are copied once.
+        val adverts = batch.filter { it.payloadType == PayloadType.ADVERT }
+        if (adverts.isNotEmpty()) ingestAdvertBatch(adverts)
+        // Channel chatter is far lower volume than the raw feed, so process each individually.
+        for (log in batch) if (log.payloadType == PayloadType.GRP_TXT) ingestGroupText(log)
+    }
+
+    /** Prepend a whole batch to the per-region history with a single map update (newest at the front). */
+    private fun addHistoryBatch(batch: List<RxLog>) {
+        val home = _homeRegion.value
+        val byRegion = batch.groupBy { regionOf(it.region, home) }
+        _historyByRegion.update { m ->
+            val out = HashMap(m)
+            for ((r, logs) in byRegion) {
+                val existing = out[r] ?: emptyList()
+                // logs are oldest-first within the batch; reverse so the newest ends up at the front.
+                out[r] = (logs.asReversed() + existing).take(MAX_PACKET_HISTORY)
+            }
+            out
+        }
+    }
+
+    /**
+     * Batched counterpart of [ingestAdvert]: merge every advert's contact and Heard entry with a single
+     * write to [_allContacts] and [_heard], instead of copying both lists once per advert. Mirrors the
+     * merge rules in [upsertObservedContact] and [upsertHeard].
+     */
+    private fun ingestAdvertBatch(adverts: List<RxLog>) {
+        val list = _allContacts.value.toMutableList()
+        val idxByKey = HashMap<String, Int>(list.size * 2)
+        list.forEachIndexed { i, c -> idxByKey[c.publicKey.toHex()] = i }
+        var changed = false
+        val learnedRegions = ArrayList<Contact>()       // contacts whose region we newly learned/changed
+        val heard = LinkedHashMap<String, HeardEntry>() // key -> newest entry in this batch (last wins)
+        for (log in adverts) {
+            val p = PacketInspector.parse(log.raw)
+            val key = p.advertPubKey?.takeIf { it.size >= 32 }?.copyOf(32) ?: continue
+            val hex = key.toHex()
+            val c = Contact(
+                publicKey = key,
+                type = p.advertType ?: ContactType.CHAT,
+                flags = 0,
+                outPathLen = 0xFF,
+                outPath = ByteArray(64),
+                name = p.advertName?.trim().orEmpty(),
+                lastAdvert = p.advertTimestamp ?: (log.receivedAtMs / 1000),
+                gpsLat = p.advertLat ?: 0,
+                gpsLon = p.advertLon ?: 0,
+                lastMod = log.receivedAtMs / 1000,
+                region = log.region,
+            )
+            val idx = idxByKey[hex]
+            val stored: Contact
+            if (idx == null) {
+                idxByKey[hex] = list.size
+                list.add(c)
+                stored = c
+                changed = true
+                if (c.region != null) learnedRegions.add(c)
+            } else {
+                val ex = list[idx]
+                val merged = ex.copy(
+                    name = c.name.ifBlank { ex.name },
+                    type = if (c.type != ContactType.NONE) c.type else ex.type,
+                    lastAdvert = maxOf(c.lastAdvert, ex.lastAdvert),
+                    gpsLat = if (c.gpsLat != 0 || c.gpsLon != 0) c.gpsLat else ex.gpsLat,
+                    gpsLon = if (c.gpsLat != 0 || c.gpsLon != 0) c.gpsLon else ex.gpsLon,
+                    region = c.region ?: ex.region,
+                    lastMod = maxOf(c.lastMod, ex.lastMod),
+                )
+                val material = merged.name != ex.name || merged.type != ex.type || merged.gpsLat != ex.gpsLat ||
+                    merged.gpsLon != ex.gpsLon || merged.region != ex.region || merged.outPathLen != ex.outPathLen
+                if (material) {
+                    list[idx] = merged
+                    changed = true
+                    if (merged.region != null && merged.region != ex.region) learnedRegions.add(merged)
+                }
+                stored = list[idx]
+            }
+            val heardName = p.advertName?.takeIf { it.isNotBlank() } ?: stored.name.ifBlank { hex.take(12) }
+            heard[hex] = HeardEntry(
+                pubKeyHex = hex,
+                name = heardName,
+                type = p.advertType ?: stored.type,
+                lastHeardMs = log.receivedAtMs,
+                snrQ = log.snrQ, rssi = log.rssi,
+                gpsLat = p.advertLat ?: stored.gpsLat,
+                gpsLon = p.advertLon ?: stored.gpsLon,
+            )
+        }
+        if (changed) {
+            _allContacts.value = list
+            scheduleContactSave()
+            // Reflect any newly-learned regions on the device-contacts view too (see upsertObservedContact).
+            if (learnedRegions.isNotEmpty()) {
+                _contacts.update { dl ->
+                    dl.map { dc ->
+                        learnedRegions.firstOrNull { it.publicKey.contentEquals(dc.publicKey) }
+                            ?.takeIf { it.region != dc.region }
+                            ?.let { dc.copy(region = it.region) } ?: dc
+                    }
+                }
+            }
+        }
+        if (heard.isNotEmpty()) {
+            _heard.update { existing ->
+                (heard.values + existing.filterNot { it.pubKeyHex in heard.keys })
+                    .sortedByDescending { it.lastHeardMs }
+            }
+        }
     }
 
     /**
