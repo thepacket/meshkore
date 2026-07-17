@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -152,10 +153,8 @@ fun PacketMonitorContent(
                 verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Checkbox(checked = groupByHash, onCheckedChange = onGroupByHashChange)
-                Text("Group by hash", style = MaterialTheme.typography.bodyMedium)
-                Checkbox(checked = autoScroll, onCheckedChange = { autoScroll = it })
-                Text("Auto-scroll", style = MaterialTheme.typography.bodyMedium)
+                CompactCheckbox(groupByHash, "Group by hash", onGroupByHashChange)
+                CompactCheckbox(autoScroll, "Auto-scroll") { autoScroll = it }
                 Spacer(Modifier.weight(1f))
                 OutlinedButton(onClick = { showFilters = true }) {
                     Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp),
@@ -754,10 +753,7 @@ private fun PacketFilterDialog(
                 FilterSection("RSSI (dBm)") { RangeFields(rssiMin, { rssiMin = it }, rssiMax, { rssiMax = it }) }
                 FilterSection("Length (bytes)") { RangeFields(lenMin, { lenMin = it }, lenMax, { lenMax = it }) }
                 FilterSection("Hops") { RangeFields(hopsMin, { hopsMin = it }, hopsMax, { hopsMax = it }) }
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Checkbox(checked = withPositionOnly, onCheckedChange = { withPositionOnly = it })
-                    Text("Only packets with a GPS position", style = MaterialTheme.typography.bodyMedium)
-                }
+                CompactCheckbox(withPositionOnly, "Only packets with a GPS position") { withPositionOnly = it }
             }
         },
     )
@@ -766,6 +762,21 @@ private fun PacketFilterDialog(
 private fun <T> Set<T>.toggle(v: T): Set<T> = if (v in this) this - v else this + v
 
 private fun fmtNum(d: Double): String = if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
+
+/** A checkbox and its label as one compact, tappable unit — no wasted gap between the box and the text. */
+@Composable
+private fun CompactCheckbox(checked: Boolean, label: String, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        modifier = Modifier.clip(RoundedCornerShape(4.dp)).clickable { onCheckedChange(!checked) },
+    ) {
+        // onCheckedChange = null hands the toggle to the row (and drops the checkbox's min touch-target
+        // padding); size() trims its footprint so the label sits right next to the box.
+        Checkbox(checked = checked, onCheckedChange = null, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.size(4.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
 
 @Composable
 private fun FilterSection(title: String, hint: String? = null, content: @Composable () -> Unit) {
