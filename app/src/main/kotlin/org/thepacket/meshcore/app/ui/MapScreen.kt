@@ -30,6 +30,7 @@ import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import android.view.MotionEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -89,23 +90,39 @@ fun MapContent(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
                 Configuration.getInstance().userAgentValue = ctx.packageName // required by OSM tile policy
-                MapView(ctx).apply {
+                val map = MapView(ctx).apply {
                     setTileSource(TileSourceFactory.MAPNIK)
                     setMultiTouchControls(true)
                     controller.setZoom(3.0)
-                    // Re-cluster as the viewport changes (clusters depend on screen positions).
-                    addMapListener(object : MapListener {
-                        override fun onScroll(event: ScrollEvent?): Boolean {
-                            rebuildOverlays(this@apply, holder, nodeIcons, clusterIcons, badgeIcons); return false
-                        }
-                        override fun onZoom(event: ZoomEvent?): Boolean {
-                            rebuildOverlays(this@apply, holder, nodeIcons, clusterIcons, badgeIcons); return false
-                        }
-                    })
                 }
+                // Clusters depend on screen positions, so they must be rebuilt as the viewport changes —
+                // but osmdroid fires scroll/zoom events continuously during a gesture. Rebuilding on each
+                // one re-clusters the whole book every frame, which is what makes zoom/pan janky. Coalesce
+                // them: reschedule a single rebuild once motion settles. Markers still pan and zoom with
+                // the map in the meantime (they're geo-anchored); only the cluster grouping is deferred.
+                val rebuild = Runnable { rebuildOverlays(map, holder, nodeIcons, clusterIcons, badgeIcons) }
+                // A single coalescing entry point for both gesture- and data-driven rebuilds: under the
+                // all-regions feed the node list churns constantly, so debouncing here stops a rebuild (and
+                // full redraw) firing on every recomposition, which was pinning the CPU.
+                holder.requestRebuild = { map.removeCallbacks(rebuild); map.postDelayed(rebuild, REBUILD_DEBOUNCE_MS) }
+                map.addMapListener(object : MapListener {
+                    override fun onScroll(event: ScrollEvent?): Boolean {
+                        map.removeCallbacks(rebuild); map.postDelayed(rebuild, REBUILD_DEBOUNCE_MS); return false
+                    }
+                    override fun onZoom(event: ZoomEvent?): Boolean {
+                        map.removeCallbacks(rebuild); map.postDelayed(rebuild, REBUILD_DEBOUNCE_MS); return false
+                    }
+                })
+                map
             },
             update = { map ->
-                rebuildOverlays(map, holder, nodeIcons, clusterIcons, badgeIcons)
+                // Only rebuild when the node set actually changed (remember() hands back the same list
+                // instance otherwise), and do it through the debounce — recompositions from the packet
+                // feed no longer force a synchronous re-cluster + redraw.
+                if (nodes !== holder.renderedNodes) {
+                    holder.renderedNodes = nodes
+                    holder.requestRebuild()
+                }
                 val f = holder.focus
                 if (f != null && f != holder.appliedFocus) {
                     map.controller.setCenter(GeoPoint(f.first, f.second))
@@ -118,7 +135,6 @@ fun MapContent(
                     if (map.zoomLevelDouble < 5.0) map.controller.setZoom(11.0)
                     holder.centered = true
                 }
-                map.invalidate()
             },
             onRelease = { it.onDetach() },
         )
@@ -149,6 +165,10 @@ fun MapContent(
 
 private class MapHolder {
     var nodes: List<MapNode> = emptyList()
+    // The node list last drawn, so recompositions that didn't change it skip the rebuild entirely.
+    var renderedNodes: List<MapNode>? = null
+    // Debounced rebuild trigger, wired up in the AndroidView factory (coalesces data + gesture updates).
+    var requestRebuild: () -> Unit = {}
     var centered = false
     var focus: Pair<Double, Double>? = null
     var appliedFocus: Pair<Double, Double>? = null
@@ -196,13 +216,17 @@ private fun rebuildOverlays(
     clusterIcons: MutableMap<Int, Drawable>,
     badgeIcons: MutableMap<String, Drawable>,
 ) {
-    val nodes = holder.nodes
+    val allNodes = holder.nodes
     map.overlays.clear()
-    if (nodes.isEmpty()) { map.invalidate(); return }
+    if (allNodes.isEmpty()) { map.invalidate(); return }
 
     val res = map.resources
     val radiusPx = CLUSTER_RADIUS_DP * res.displayMetrics.density
     val proj = map.projection
+    // Only cluster and draw what's on screen (plus a margin). With a large address book most nodes are
+    // off-screen once zoomed in, so this keeps the O(n²) clustering proportional to the visible set.
+    val nodes = cullToViewport(allNodes, map.boundingBox)
+    if (nodes.isEmpty()) { map.invalidate(); return }
     val pts = nodes.map { proj.toPixels(GeoPoint(it.lat, it.lon), null) }
     val used = BooleanArray(nodes.size)
 
@@ -265,6 +289,22 @@ private fun rebuildOverlays(
 }
 
 private const val CLUSTER_RADIUS_DP = 26f
+private const val REBUILD_DEBOUNCE_MS = 100L // coalesce a scroll/zoom gesture's events into one rebuild
+private const val VIEWPORT_MARGIN = 0.25 // expand the visible bounds this much before culling off-screen nodes
+
+/** Nodes within the visible bounds, expanded by [VIEWPORT_MARGIN] so a small pan doesn't pop edge markers. */
+private fun cullToViewport(nodes: List<MapNode>, bb: BoundingBox): List<MapNode> {
+    val latMargin = (bb.latNorth - bb.latSouth) * VIEWPORT_MARGIN
+    val lonMargin = (bb.lonEast - bb.lonWest) * VIEWPORT_MARGIN
+    val north = bb.latNorth + latMargin
+    val south = bb.latSouth - latMargin
+    val west = bb.lonWest - lonMargin
+    val east = bb.lonEast + lonMargin
+    // Skip culling when the view wraps the antemeridian (east <= west) or spans ~the whole world: clustering
+    // everything is fine there and this avoids wrap-around edge cases.
+    if (east <= west || (north - south) >= 170.0) return nodes
+    return nodes.filter { it.lat in south..north && it.lon in west..east }
+}
 
 /** A node marker plus the vertical anchor that puts its circle (not its label) on the geo point. */
 private class NodeIcon(val drawable: Drawable, val anchorV: Float)
