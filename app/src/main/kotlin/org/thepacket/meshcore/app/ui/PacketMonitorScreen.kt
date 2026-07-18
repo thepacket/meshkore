@@ -89,6 +89,9 @@ fun PacketMonitorContent(
     // recomputing) — but it stays visible. Not paused by default.
     paused: Boolean = false,
     onPausedChange: (Boolean) -> Unit = {},
+    // Hoisted so it survives leaving the tab (owned by the ViewModel).
+    autoScroll: Boolean = true,
+    onAutoScrollChange: (Boolean) -> Unit = {},
 ) {
     // Collected here (not hoisted to the Activity) so the expensive packetHistory flow is only
     // subscribed while this tab is on screen — it idles on every other tab and when backgrounded.
@@ -145,7 +148,6 @@ fun PacketMonitorContent(
     val listState = rememberLazyListState()
     // Follow the tail: keep the newest packet (index 0, since the feed is newest-first) in view as
     // packets arrive. Keyed on the newest group's hash so it re-scrolls whenever a new one lands.
-    var autoScroll by remember { mutableStateOf(true) }
     val newestKey = groups.firstOrNull()?.hash
     LaunchedEffect(newestKey, autoScroll) {
         if (autoScroll && newestKey != null) listState.animateScrollToItem(0)
@@ -158,7 +160,7 @@ fun PacketMonitorContent(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             CompactCheckbox(paused, "Paused", onPausedChange)
-            CompactCheckbox(autoScroll, "Auto-scroll") { autoScroll = it }
+            CompactCheckbox(autoScroll, "Auto-scroll", onAutoScrollChange)
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = { showFilters = true }) {
                 Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp),

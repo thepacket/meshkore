@@ -112,6 +112,17 @@ fun ContactsContent(
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
     tab: Int = 0,
     onTab: (Int) -> Unit = {},
+    // Filters hoisted so they survive leaving the tab (owned by the ViewModel).
+    allType: Int = 0,
+    onAllType: (Int) -> Unit = {},
+    allRegion: String = ALL_REGIONS,
+    onAllRegion: (String) -> Unit = {},
+    allQuery: String = "",
+    onAllQuery: (String) -> Unit = {},
+    deviceType: Int = 0,
+    onDeviceType: (Int) -> Unit = {},
+    deviceQuery: String = "",
+    onDeviceQuery: (String) -> Unit = {},
 ) {
     // An exported contact card arrives asynchronously — show it for copy/share.
     var exportedCard by remember { mutableStateOf<String?>(null) }
@@ -125,8 +136,17 @@ fun ContactsContent(
             Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Device contacts") })
         }
         when (tab) {
-            0 -> AllContactsList(session, self, onOpenConversation, onShowOnMap)
-            else -> ContactsList(session, self, contacts, onOpenConversation, onShowOnMap)
+            0 -> AllContactsList(
+                session, self, onOpenConversation, onShowOnMap,
+                typeFilter = allType, onTypeFilter = onAllType,
+                regionFilter = allRegion, onRegionFilter = onAllRegion,
+                query = allQuery, onQuery = onAllQuery,
+            )
+            else -> ContactsList(
+                session, self, contacts, onOpenConversation, onShowOnMap,
+                typeFilter = deviceType, onTypeFilter = onDeviceType,
+                query = deviceQuery, onQuery = onDeviceQuery,
+            )
         }
     }
 
@@ -160,6 +180,13 @@ private fun AllContactsList(
     self: SelfInfo?,
     onOpen: (String, String) -> Unit,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+    // Hoisted filters (owned by the ViewModel) so they persist across tab switches.
+    typeFilter: Int,
+    onTypeFilter: (Int) -> Unit,
+    regionFilter: String,
+    onRegionFilter: (String) -> Unit,
+    query: String,
+    onQuery: (String) -> Unit,
 ) {
     val ctx = LocalContext.current
     val allContacts by session.allContacts.collectAsStateWithLifecycle()
@@ -171,12 +198,9 @@ private fun AllContactsList(
     val linkState by session.linkState.collectAsStateWithLifecycle()
     val connected = linkState == LinkState.Connected
     var detail by remember { mutableStateOf<Contact?>(null) }
-    var query by remember { mutableStateOf("") }
     var confirmSend by remember { mutableStateOf(false) }
-    // Local filters (dropdowns): type 0 = All, 1 = Clients, 2 = Repeaters, 3 = Room Servers, 4 = Sensors;
-    // region defaults to "All" so this tab really shows all contacts until narrowed.
-    var typeFilter by remember { mutableStateOf(0) }
-    var regionFilter by remember { mutableStateOf(ALL_REGIONS) }
+    // Filters (type 0 = All, 1 = Clients, 2 = Repeaters, 3 = Room Servers, 4 = Sensors; region "All"
+    // shows everything) come from the caller so they persist across tab switches.
     // Contacts heard by the companion carry no region of their own, so they belong to Home.
     val home by session.homeRegion.collectAsStateWithLifecycle()
     val regionScoped = remember(allContacts, regionFilter, home) {
@@ -251,14 +275,14 @@ private fun AllContactsList(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             FilterDropdown("Region", regionOptions, regionIndex, Modifier.weight(1f)) {
-                regionFilter = MqttPrefs.REGIONS[it].second
+                onRegionFilter(MqttPrefs.REGIONS[it].second)
             }
-            FilterDropdown("Type", typeOptions, typeFilter, Modifier.weight(1f)) { typeFilter = it }
+            FilterDropdown("Type", typeOptions, typeFilter, Modifier.weight(1f)) { onTypeFilter(it) }
         }
         if (allContacts.isNotEmpty()) {
             CompactSearchField(
                 query = query,
-                onQueryChange = { query = it },
+                onQueryChange = onQuery,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             )
         }
@@ -409,13 +433,16 @@ private fun ContactsList(
     contacts: List<Contact>,
     onOpen: (String, String) -> Unit,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+    // Hoisted (ViewModel) so they persist across tab switches. Type: 0 = Clients, 1 = Repeaters,
+    // 2 = Room Servers, 3 = Sensors.
+    typeFilter: Int = 0,
+    onTypeFilter: (Int) -> Unit = {},
+    query: String = "",
+    onQuery: (String) -> Unit = {},
 ) {
     var detail by remember { mutableStateOf<Contact?>(null) }
     var manage by remember { mutableStateOf<Contact?>(null) }
     var showImport by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
-    // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
-    var typeFilter by remember { mutableStateOf(0) }
     val contactTelemetry by session.contactTelemetry.collectAsStateWithLifecycle()
     val contactMma by session.contactMma.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
@@ -470,12 +497,12 @@ private fun ContactsList(
             // Make sure the imported contact's filter tab is active, else its row is hidden
             // and the scroll below would wait forever.
             contactsState.value.firstOrNull { it.keyPrefixHex == key }?.let { c ->
-                typeFilter = when (c.type) {
+                onTypeFilter(when (c.type) {
                     ContactType.REPEATER -> 1
                     ContactType.ROOM -> 2
                     ContactType.SENSOR -> 3
                     else -> 0
-                }
+                })
             }
             // Wait until the imported row is present in the data, then let the rebuilt list
             // fully settle before scrolling — scrolling mid-rebuild uses stale measurements
@@ -495,7 +522,7 @@ private fun ContactsList(
         }
         TypeFilterRow(
             selected = typeFilter,
-            onSelect = { typeFilter = it },
+            onSelect = onTypeFilter,
             clientCount = clients.size,
             repeaterCount = repeaters.size,
             roomCount = rooms.size,
@@ -504,7 +531,7 @@ private fun ContactsList(
         if (contacts.isNotEmpty()) {
             CompactSearchField(
                 query = query,
-                onQueryChange = { query = it },
+                onQueryChange = onQuery,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
             )
         }

@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.thepacket.meshcore.app.ALL_REGIONS
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.MainTab
 import org.thepacket.meshcore.app.MeshSession
@@ -58,6 +59,18 @@ fun MainScaffold(
     onPacketFilter: (PacketFilter) -> Unit = {},
     packetMonitorPaused: Boolean = false,
     onPacketMonitorPaused: (Boolean) -> Unit = {},
+    packetAutoScroll: Boolean = true,
+    onPacketAutoScroll: (Boolean) -> Unit = {},
+    allContactsType: Int = 0,
+    onAllContactsType: (Int) -> Unit = {},
+    allContactsRegion: String = ALL_REGIONS,
+    onAllContactsRegion: (String) -> Unit = {},
+    allContactsQuery: String = "",
+    onAllContactsQuery: (String) -> Unit = {},
+    deviceContactsType: Int = 0,
+    onDeviceContactsType: (Int) -> Unit = {},
+    deviceContactsQuery: String = "",
+    onDeviceContactsQuery: (String) -> Unit = {},
 ) {
     // Scope the map to the globally-selected region (Settings), Home resolving region-less nodes.
     val mapRegion by session.region.collectAsStateWithLifecycle()
@@ -128,13 +141,21 @@ fun MainScaffold(
         val m = Modifier.padding(pad)
         when (tab) {
             MainTab.Channels -> ChannelsContent(session, channels, onOpenConversation, m)
-            MainTab.Contacts -> ContactsContent(session, self, contacts, onOpenConversation, m, onShowOnMap, contactsTab, onContactsTab)
+            MainTab.Contacts -> ContactsContent(
+                session, self, contacts, onOpenConversation, m, onShowOnMap, contactsTab, onContactsTab,
+                allType = allContactsType, onAllType = onAllContactsType,
+                allRegion = allContactsRegion, onAllRegion = onAllContactsRegion,
+                allQuery = allContactsQuery, onAllQuery = onAllContactsQuery,
+                deviceType = deviceContactsType, onDeviceType = onDeviceContactsType,
+                deviceQuery = deviceContactsQuery, onDeviceQuery = onDeviceContactsQuery,
+            )
             MainTab.Heard -> HeardContent(heard, contacts, self, session, m, onShowOnMap)
             MainTab.Packets -> PacketMonitorContent(
                 // Use the aggregate (global) address book so names resolve for nodes not on this device.
                 allContacts, self, session, m, onShowOnMap,
                 filter = packetFilter, onFilterChange = onPacketFilter,
                 paused = packetMonitorPaused, onPausedChange = onPacketMonitorPaused,
+                autoScroll = packetAutoScroll, onAutoScrollChange = onPacketAutoScroll,
             )
             MainTab.Map -> MapContent(
                 self, allContacts, heard, m,

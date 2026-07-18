@@ -131,6 +131,18 @@ class MainActivity : ComponentActivity() {
                         onPacketFilter = vm::setPacketFilter,
                         packetMonitorPaused = state.packetMonitorPaused,
                         onPacketMonitorPaused = vm::setPacketMonitorPaused,
+                        packetAutoScroll = state.packetAutoScroll,
+                        onPacketAutoScroll = vm::setPacketAutoScroll,
+                        allContactsType = state.allContactsType,
+                        onAllContactsType = vm::setAllContactsType,
+                        allContactsRegion = state.allContactsRegion,
+                        onAllContactsRegion = vm::setAllContactsRegion,
+                        allContactsQuery = state.allContactsQuery,
+                        onAllContactsQuery = vm::setAllContactsQuery,
+                        deviceContactsType = state.deviceContactsType,
+                        onDeviceContactsType = vm::setDeviceContactsType,
+                        deviceContactsQuery = state.deviceContactsQuery,
+                        onDeviceContactsQuery = vm::setDeviceContactsQuery,
                     )
                     is Screen.Conversation -> {
                         // A room-server conversation gets a login banner + per-post authors.

@@ -44,6 +44,14 @@ data class UiState(
     val packetFilter: PacketFilter = PacketFilter(),
     /** Packet monitor pause switch. Not paused by default — the monitor processes until paused. */
     val packetMonitorPaused: Boolean = false,
+    /** Packet monitor auto-scroll toggle. Hoisted so it survives tab switches / rotation. */
+    val packetAutoScroll: Boolean = true,
+    // Contacts list filters, hoisted so a chosen region/type/search survives leaving the tab.
+    val allContactsType: Int = 0,               // 0 = All, 1 = Clients, 2 = Repeaters, 3 = Rooms, 4 = Sensors
+    val allContactsRegion: String = ALL_REGIONS,
+    val allContactsQuery: String = "",
+    val deviceContactsType: Int = 0,
+    val deviceContactsQuery: String = "",
 )
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
@@ -175,6 +183,14 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeMapFocus() = _ui.update { it.copy(mapFocus = null) }
 
     fun setContactsTab(index: Int) = _ui.update { it.copy(contactsTab = index) }
+
+    // Hoisted contacts-filter + packet-monitor view state, so it persists across tab switches.
+    fun setPacketAutoScroll(on: Boolean) = _ui.update { it.copy(packetAutoScroll = on) }
+    fun setAllContactsType(i: Int) = _ui.update { it.copy(allContactsType = i) }
+    fun setAllContactsRegion(r: String) = _ui.update { it.copy(allContactsRegion = r) }
+    fun setAllContactsQuery(q: String) = _ui.update { it.copy(allContactsQuery = q) }
+    fun setDeviceContactsType(i: Int) = _ui.update { it.copy(deviceContactsType = i) }
+    fun setDeviceContactsQuery(q: String) = _ui.update { it.copy(deviceContactsQuery = q) }
 
     // ---- packet monitor view state ----
     fun setPacketFilter(filter: PacketFilter) = _ui.update { it.copy(packetFilter = filter) }
