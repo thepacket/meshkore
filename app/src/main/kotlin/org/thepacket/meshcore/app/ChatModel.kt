@@ -61,22 +61,21 @@ data class ChannelEntry(val index: Int, val name: String, val secret: ByteArray 
 }
 
 /**
- * A channel we only *listen* to, in a region observed over MQTT. Unlike [ChannelEntry] there is no
- * device slot behind it — nothing transmits on it — so it is identified by its key within its region
- * and the firmware's eight-slot limit doesn't apply: follow as many as you like purely to decode.
+ * A channel we only *listen* to (observed over MQTT). Unlike [ChannelEntry] there is no device slot
+ * behind it — nothing transmits on it — so the firmware's eight-slot limit doesn't apply: follow as
+ * many as you like purely to decode.
  *
- * Regions never share channels. The same key observed in two regions is two channels with two
- * histories, which is why [region] is part of identity while [name] (display only) is not.
+ * A channel is global, not region-scoped: the same key is one channel with one history no matter
+ * which region(s) its traffic is observed in. Identity is the [secret]; [name] is display only.
  */
-data class ObservedChannel(val region: String, val name: String, val secret: ByteArray) {
+data class ObservedChannel(val name: String, val secret: ByteArray) {
     val displayName: String get() = name.ifBlank { "Channel ${Conversation.keyFingerprint(secret).take(6)}" }
 
     /** Where this channel's observed history is bucketed. */
-    val conversationId: String get() = Conversation.observedChannelId(region, secret)
+    val conversationId: String get() = Conversation.observedChannelId(secret)
 
-    override fun equals(other: Any?) = other is ObservedChannel &&
-        region == other.region && secret.contentEquals(other.secret)
-    override fun hashCode() = region.hashCode() * 31 + secret.contentHashCode()
+    override fun equals(other: Any?) = other is ObservedChannel && secret.contentEquals(other.secret)
+    override fun hashCode() = secret.contentHashCode()
 }
 
 /** Delivery lifecycle of a chat message. */
@@ -91,6 +90,9 @@ data class ChatMessage(
     val incoming: Boolean,
     val status: MsgStatus,
     val snrDb: Double? = null,
+    /** Observed-channel messages: the RSSI and region reported by the node that relayed it to the broker. */
+    val rssi: Int? = null,
+    val region: String? = null,
     val expectedAck: Long = 0,
     /** For room-server posts: hex of the author's 4-byte key prefix (null for normal DMs/channels). */
     val authorPrefix: String? = null,
@@ -120,15 +122,16 @@ sealed interface Conversation {
         fun channelId(index: Int): String = "ch:$index"
 
         /**
-         * Id for an observed channel's history: its region plus a fingerprint of its key.
+         * Id for an observed channel's history: a fingerprint of its key. Channels are global — not
+         * region-scoped — so one key is one conversation everywhere its traffic is heard.
          *
          * Not the slot — there isn't one — and deliberately not the key itself: conversation ids are
          * persisted in [ChatStore], and the PSK shouldn't ride along in them. Device channels keep
          * their slot-based [channelId]; the two schemes share no namespace, so observed history and
          * companion history never collide even for the same key.
          */
-        fun observedChannelId(region: String, secret: ByteArray): String =
-            "ch:$region:${keyFingerprint(secret)}"
+        fun observedChannelId(secret: ByteArray): String =
+            "ch:${keyFingerprint(secret)}"
 
         /** First 8 bytes of SHA-256 over the 128-bit key, hex — stable across runs, and one-way. */
         fun keyFingerprint(secret: ByteArray): String =

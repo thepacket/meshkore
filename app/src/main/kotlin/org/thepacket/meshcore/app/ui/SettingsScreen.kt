@@ -747,6 +747,7 @@ private const val HOME_NOT_SET = "Not set"
 private fun MqttCard(ctx: Context) {
     val prefs = remember { MqttPrefs(ctx) }
     var enabled by remember { mutableStateOf(prefs.enabled) }
+    var pauseBg by remember { mutableStateOf(prefs.pauseInBackground) }
     var broker by remember { mutableIntStateOf(prefs.broker) }
     var user by remember { mutableStateOf(prefs.username) }
     var pass by remember { mutableStateOf(prefs.password) }
@@ -763,6 +764,7 @@ private fun MqttCard(ctx: Context) {
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         )
         SwitchRow("Enabled", enabled) { on -> enabled = on; save(); MeshConnection.setMqttEnabled(ctx, on) }
+        SwitchRow("Pause feed in background", pauseBg) { on -> pauseBg = on; prefs.pauseInBackground = on }
         EnumDropdown("Broker", brokers.map { it.first }, broker.coerceIn(brokers.indices)) { i ->
             broker = i
             prefs.broker = i

@@ -8,11 +8,11 @@ import org.thepacket.meshcore.protocol.toHex
 import java.io.File
 
 /**
- * On-disk persistence for [ObservedChannel]s — the keys we listen with in each observed region.
+ * On-disk persistence for [ObservedChannel]s — the keys we listen with when observing.
  *
  * Separate from the companion's own channels by design: those live in device slots and are read back
  * over BLE, whereas these exist only here, survive with no device attached at all, and are what makes
- * a region's traffic decodable when we're purely observing it.
+ * observed traffic decodable.
  *
  * Stored as a single JSON array in app-private storage, mirroring [ContactStore].
  */
@@ -34,7 +34,6 @@ class ObservedChannelStore(private val file: File) {
             val arr = JSONArray()
             channels.forEach { c ->
                 arr.put(JSONObject().apply {
-                    put("region", c.region)
                     put("name", c.name)
                     put("secret", c.secret.toHex())
                 })
@@ -42,18 +41,22 @@ class ObservedChannelStore(private val file: File) {
             return arr.toString(2)
         }
 
-        /** Parse a JSON array produced by [encode]; skips entries without a region or a 128-bit key. */
+        /**
+         * Parse a JSON array produced by [encode]; skips entries without a 128-bit key. Channels are
+         * global, so a legacy file that stored the same key once per region collapses to one entry
+         * here (first name wins); the next [save] rewrites it region-free.
+         */
         fun decode(text: String): List<ObservedChannel> {
             val arr = JSONArray(text)
-            return buildList {
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    val region = o.optString("region", "")
-                    val secret = o.optString("secret", "").hexToBytes()
-                    if (region.isBlank() || secret.size < 16) continue
-                    add(ObservedChannel(region, o.optString("name", ""), secret.copyOf(16)))
-                }
+            val byKey = LinkedHashMap<String, ObservedChannel>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val secret = o.optString("secret", "").hexToBytes()
+                if (secret.size < 16) continue
+                val key = secret.copyOf(16)
+                byKey.getOrPut(key.toHex()) { ObservedChannel(o.optString("name", ""), key) }
             }
+            return byKey.values.toList()
         }
     }
 }

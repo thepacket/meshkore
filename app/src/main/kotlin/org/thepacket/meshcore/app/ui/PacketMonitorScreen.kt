@@ -60,13 +60,11 @@ import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.app.haversineKm
 import org.thepacket.meshcore.app.regionLabel
-import org.thepacket.meshcore.app.regionMatches
 import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.GroupCipher
 import org.thepacket.meshcore.protocol.LoRaAirtime
-import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.ParsedPacket
 import org.thepacket.meshcore.protocol.PathDiscoveryResult
 import org.thepacket.meshcore.protocol.PayloadType
@@ -79,18 +77,22 @@ import java.util.Locale
 
 @Composable
 fun PacketMonitorContent(
-    packets: List<RxLog>,
     contacts: List<Contact>,
     self: SelfInfo?,
     session: MeshSession,
     modifier: Modifier = Modifier,
     onShowOnMap: (lat: Double, lon: Double) -> Unit = { _, _ -> },
-    // Hoisted so filters + grouping persist across tab switches (owned by the ViewModel).
+    // Hoisted so filters + the pause switch persist across tab switches (owned by the ViewModel).
     filter: PacketFilter = PacketFilter(),
     onFilterChange: (PacketFilter) -> Unit = {},
-    groupByHash: Boolean = false,
-    onGroupByHashChange: (Boolean) -> Unit = {},
+    // When paused, the shown list freezes on its last snapshot (and the heavy derivations stop
+    // recomputing) — but it stays visible. Not paused by default.
+    paused: Boolean = false,
+    onPausedChange: (Boolean) -> Unit = {},
 ) {
+    // Collected here (not hoisted to the Activity) so the expensive packetHistory flow is only
+    // subscribed while this tab is on screen — it idles on every other tab and when backgrounded.
+    val packets by session.packetHistory.collectAsStateWithLifecycle()
     var detail by remember { mutableStateOf<RxLog?>(null) }
     var showFilters by remember { mutableStateOf(false) }
     // Which hash-groups are expanded (default collapsed). Keyed by payload fingerprint.
@@ -102,70 +104,71 @@ fun PacketMonitorContent(
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val deviceChannels by session.channels.collectAsStateWithLifecycle()
     val observed by session.observedChannels.collectAsStateWithLifecycle()
-    val selectedRegion by session.region.collectAsStateWithLifecycle()
     val messages by session.messages.collectAsStateWithLifecycle()
 
     // Decode with every key we hold that could apply to what's on screen: the companion's slots plus
     // the keys we follow in the region being shown. The monitor is a diagnostic view — "not our
     // channel" should mean we genuinely don't have the key, not that it's filed somewhere else.
-    val channels = remember(deviceChannels, observed, selectedRegion) {
-        deviceChannels + observed.filter { regionMatches(selectedRegion, it.region) }
+    // Observed channels are global (not region-scoped); dedup by key so the same channel isn't
+    // added to the decode set more than once.
+    val channels = remember(deviceChannels, observed) {
+        deviceChannels + observed.distinctBy { it.conversationId }
             .map { ChannelEntry(index = -1, name = it.displayName, secret = it.secret) }
     }
 
-    // Apply the field filters (card) to the live feed.
-    val filtered = remember(packets, filter) {
-        packets.filter { log -> filter.matches(log, PacketInspector.parse(log.raw)) }
+    // The feed the monitor renders. While paused we freeze on the last snapshot: the derivations
+    // below stop recomputing (no per-packet work) while the list stays on screen. Live otherwise.
+    val shownPackets = remember { mutableStateOf(packets) }
+    LaunchedEffect(packets, paused) { if (!paused) shownPackets.value = packets }
+    val feed = shownPackets.value
+
+    // Apply the field filters (card) to the (possibly frozen) feed.
+    val filtered = remember(feed, filter) {
+        feed.filter { log -> filter.matches(log, log.parsed) }
     }
 
     // Region-aware name resolution for hop/source hashes (adverts' full keys, scoped by packet region).
     val home by session.homeRegion.collectAsStateWithLifecycle()
-    val resolver = remember(packets, contacts, home) { NodeResolver(packets, contacts, home) }
+    val resolver = remember(feed, contacts, home) { NodeResolver(feed, contacts, home) }
 
-    // When grouping is on, fold packets sharing a payload fingerprint (flood rebroadcasts of the
-    // same content) into one group. Groups keep first-seen order (newest activity first); the
-    // representative shown when collapsed is the earliest received copy.
-    val groups = remember(filtered, groupByHash) {
-        if (!groupByHash) emptyList()
-        else {
-            val byHash = LinkedHashMap<Long, MutableList<RxLog>>()
-            for (log in filtered) byHash.getOrPut(payloadFingerprint(log)) { mutableListOf() }.add(log)
-            byHash.map { (h, members) ->
-                PacketGroup(h, members.minByOrNull { it.receivedAtMs } ?: members.first(), members)
-            }
+    // Always fold packets sharing a payload fingerprint (flood rebroadcasts of the same content) into
+    // one group. Groups keep first-seen order (newest activity first); the representative shown when
+    // collapsed is the earliest received copy.
+    val groups = remember(filtered) {
+        val byHash = LinkedHashMap<Long, MutableList<RxLog>>()
+        for (log in filtered) byHash.getOrPut(payloadFingerprint(log)) { mutableListOf() }.add(log)
+        byHash.map { (h, members) ->
+            PacketGroup(h, members.minByOrNull { it.receivedAtMs } ?: members.first(), members)
         }
     }
 
     val listState = rememberLazyListState()
     // Follow the tail: keep the newest packet (index 0, since the feed is newest-first) in view as
-    // packets arrive. Keyed on the newest row's identity so it re-scrolls whenever a new one lands.
+    // packets arrive. Keyed on the newest group's hash so it re-scrolls whenever a new one lands.
     var autoScroll by remember { mutableStateOf(true) }
-    val newestKey = if (groupByHash) groups.firstOrNull()?.hash
-        else filtered.firstOrNull()?.let { System.identityHashCode(it) }
+    val newestKey = groups.firstOrNull()?.hash
     LaunchedEffect(newestKey, autoScroll) {
         if (autoScroll && newestKey != null) listState.animateScrollToItem(0)
     }
 
     Column(modifier.fillMaxSize()) {
-        if (packets.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CompactCheckbox(groupByHash, "Group by hash", onGroupByHashChange)
-                CompactCheckbox(autoScroll, "Auto-scroll") { autoScroll = it }
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = { showFilters = true }) {
-                    Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp),
-                        tint = if (filter.isActive) MaterialTheme.colorScheme.primary
-                        else LocalContentColor.current)
-                    Spacer(Modifier.size(6.dp))
-                    Text(if (filter.isActive) "Filters •" else "Filters")
-                }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CompactCheckbox(paused, "Paused", onPausedChange)
+            CompactCheckbox(autoScroll, "Auto-scroll") { autoScroll = it }
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = { showFilters = true }) {
+                Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp),
+                    tint = if (filter.isActive) MaterialTheme.colorScheme.primary
+                    else LocalContentColor.current)
+                Spacer(Modifier.size(6.dp))
+                Text(if (filter.isActive) "Filters •" else "Filters")
             }
         }
-        if (packets.isEmpty()) {
+        if (feed.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 Text("Listening for packets…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             }
@@ -180,32 +183,26 @@ fun PacketMonitorContent(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (groupByHash) {
-                    items(groups, key = { it.hash }) { g ->
-                        if (g.members.size == 1) {
-                            PacketRow(g.rep, self, resolver, now) { detail = g.rep }
-                        } else {
-                            val expanded = expandedGroups[g.hash] == true
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                PacketRow(
-                                    g.rep, self, resolver, now,
-                                    badge = "×${g.members.size}",
-                                    expanded = expanded,
-                                    onToggle = { expandedGroups[g.hash] = !expanded },
-                                ) { detail = g.rep }
-                                if (expanded) {
-                                    g.members.filter { it !== g.rep }.forEach { m ->
-                                        Box(Modifier.padding(start = 16.dp)) {
-                                            PacketRow(m, self, resolver, now) { detail = m }
-                                        }
+                items(groups, key = { it.hash }) { g ->
+                    if (g.members.size == 1) {
+                        PacketRow(g.rep, self, resolver, now) { detail = g.rep }
+                    } else {
+                        val expanded = expandedGroups[g.hash] == true
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            PacketRow(
+                                g.rep, self, resolver, now,
+                                badge = "×${g.members.size}",
+                                expanded = expanded,
+                                onToggle = { expandedGroups[g.hash] = !expanded },
+                            ) { detail = g.rep }
+                            if (expanded) {
+                                g.members.filter { it !== g.rep }.forEach { m ->
+                                    Box(Modifier.padding(start = 16.dp)) {
+                                        PacketRow(m, self, resolver, now) { detail = m }
                                     }
                                 }
                             }
                         }
-                    }
-                } else {
-                    items(filtered, key = { System.identityHashCode(it) }) { p ->
-                        PacketRow(p, self, resolver, now) { detail = p }
                     }
                 }
             }
@@ -213,7 +210,7 @@ fun PacketMonitorContent(
     }
 
     detail?.let { log ->
-        val parsed = remember(log) { PacketInspector.parse(log.raw) }
+        val parsed = log.parsed
         val srcKey = sourcePubKey(parsed, log.region, resolver)
         PacketDetailDialog(
             log, parsed, contacts, self, resolver, onShowOnMap,
@@ -430,7 +427,7 @@ private fun rebroadcastCopies(log: RxLog, all: List<RxLog>): Int {
 
 /** FNV-1a over the payload type + payload bytes (path excluded), like the on-device UI. */
 private fun payloadFingerprint(log: RxLog): Long {
-    val p = PacketInspector.parse(log.raw)
+    val p = log.parsed
     var h = 2166136261L
     h = ((h xor p.payloadType.toLong()) * 16777619L) and 0xFFFFFFFFL
     for (b in p.payload) h = ((h xor (b.toLong() and 0xFF)) * 16777619L) and 0xFFFFFFFFL
@@ -501,7 +498,7 @@ private fun PacketRow(
     onToggle: (() -> Unit)? = null,  // non-null => show an expand/collapse chevron
     onClick: () -> Unit,
 ) {
-    val parsed = remember(p) { PacketInspector.parse(p.raw) }
+    val parsed = p.parsed
     val source = rowSource(parsed, p.region, resolver, self)
     val selfHasGps = self != null && (self.advLat != 0 || self.advLon != 0)
     val srcPos = sourcePosition(parsed, p.region, resolver)

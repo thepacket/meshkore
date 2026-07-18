@@ -159,14 +159,14 @@ class MeshSession(
     private val _observedChannels = MutableStateFlow<List<ObservedChannel>>(emptyList())
     val observedChannels: StateFlow<List<ObservedChannel>> = _observedChannels.asStateFlow()
 
-    /** Follow [items] (name → key) in [region], skipping keys already followed there. Returns how many were new. */
-    fun addObservedChannels(region: String, items: List<Pair<String, ByteArray>>): Int {
+    /** Follow [items] (name → key), skipping keys already followed. Returns how many were new. */
+    fun addObservedChannels(items: List<Pair<String, ByteArray>>): Int {
         val cur = _observedChannels.value
         val add = items
             .mapNotNull { (name, key) ->
-                key.takeIf { it.size >= 16 }?.let { ObservedChannel(region, name.trim(), it.copyOf(16)) }
+                key.takeIf { it.size >= 16 }?.let { ObservedChannel(name.trim(), it.copyOf(16)) }
             }
-            .distinct() // identity is region+key, so this also collapses dupes within the batch
+            .distinct() // identity is the key, so this also collapses dupes within the batch
             .filter { it !in cur }
         if (add.isEmpty()) return 0
         _observedChannels.value = cur + add
@@ -175,8 +175,20 @@ class MeshSession(
     }
 
     /**
+     * Edit a followed channel: replace [old] with a channel named [name] using [secret]. A pure rename
+     * (same key) keeps the conversation id, so history survives; changing the key makes it a new channel.
+     * Any existing entry for the new key is collapsed away (identity is the key).
+     */
+    fun updateObservedChannel(old: ObservedChannel, name: String, secret: ByteArray) {
+        if (secret.size < 16) return
+        val updated = ObservedChannel(name.trim(), secret.copyOf(16))
+        _observedChannels.value = _observedChannels.value.filter { it != old && it != updated } + updated
+        observedChannelStore?.save(_observedChannels.value)
+    }
+
+    /**
      * Stop following [channel]. Its collected history is deliberately left in place — re-adding the
-     * same key in the same region resolves to the same conversation id and picks it back up.
+     * same key resolves to the same conversation id and picks it back up.
      */
     fun removeObservedChannel(channel: ObservedChannel) {
         val next = _observedChannels.value.filter { it != channel }
@@ -257,7 +269,9 @@ class MeshSession(
             if (r == ALL_REGIONS) m.values.flatten().sortedByDescending { it.receivedAtMs }.take(MAX_PACKET_HISTORY)
             else m[r] ?: emptyList()
         }
-            .stateIn(scope, SharingStarted.Eagerly, emptyList())
+            // WhileSubscribed, not Eagerly: this flatten/sort is expensive on the all-regions feed, so it
+            // must stop churning when no screen is observing (app backgrounded, or on an unrelated tab).
+            .stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
      * Packet count per region across everything collected — spans all regions regardless of the
@@ -267,7 +281,7 @@ class MeshSession(
     @OptIn(FlowPreview::class)
     val regionCounts: StateFlow<Map<String, Int>> =
         _historyByRegion.sample(UI_THROTTLE_MS).map { m -> m.mapValues { it.value.size } }
-            .stateIn(scope, SharingStarted.Eagerly, emptyMap())
+            .stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     private fun addToHistory(log: RxLog) {
         val r = regionOf(log.region, _homeRegion.value)
@@ -291,7 +305,7 @@ class MeshSession(
     private val _heard = MutableStateFlow<List<HeardEntry>>(emptyList())
     @OptIn(FlowPreview::class)
     val heard: StateFlow<List<HeardEntry>> =
-        _heard.sample(UI_THROTTLE_MS).stateIn(scope, SharingStarted.Eagerly, emptyList())
+        _heard.sample(UI_THROTTLE_MS).stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Received raw custom-payload packets (PUSH_CODE_RAW_DATA), newest first, capped. */
     private val _rawData = MutableStateFlow<List<RawDataFrame>>(emptyList())
@@ -527,7 +541,7 @@ class MeshSession(
         val learnedRegions = ArrayList<Contact>()       // contacts whose region we newly learned/changed
         val heard = LinkedHashMap<String, HeardEntry>() // key -> newest entry in this batch (last wins)
         for (log in adverts) {
-            val p = PacketInspector.parse(log.raw)
+            val p = log.parsed
             val key = p.advertPubKey?.takeIf { it.size >= 32 }?.copyOf(32) ?: continue
             val hex = key.toHex()
             val c = Contact(
@@ -605,32 +619,33 @@ class MeshSession(
     }
 
     /**
-     * Decode an observed GRP_TXT into its region's channel history, using the keys we follow there
+     * Decode an observed GRP_TXT into its (global) channel history, using the keys we follow
      * ([observedChannels]). The counterpart of [ingestAdvert] for chat rather than stations.
      *
-     * Only MQTT-sourced packets are ingested. Traffic the companion hears is already delivered
-     * decrypted as a proper channel message (see [storeIncoming]); ingesting the raw LOG_RX_DATA copy
-     * of it as well would store every message twice.
+     * Only MQTT-sourced packets are ingested (region != null). Traffic the companion hears is already
+     * delivered decrypted as a proper channel message (see [storeIncoming]); ingesting the raw
+     * LOG_RX_DATA copy of it as well would store every message twice.
      */
     private fun ingestGroupText(log: RxLog) {
-        val region = log.region ?: return
-        val p = PacketInspector.parse(log.raw)
+        if (log.region == null) return // BLE/companion traffic arrives decoded elsewhere; only ingest observed
+        val p = log.parsed
         val hash = p.channelHash ?: return
         if (p.payload.size < 2) return
         val body = p.payload.copyOfRange(1, p.payload.size) // after the channel-hash byte
         for (ch in _observedChannels.value) {
             // The hash is one byte, so it only narrows the candidates — the MAC check in decrypt is
-            // what actually identifies the channel.
-            if (ch.region != region || GroupCipher.channelHash(ch.secret) != hash) continue
+            // what actually identifies the channel. A channel is global, so traffic heard in any
+            // region folds into the one conversation for that key.
+            if (GroupCipher.channelHash(ch.secret) != hash) continue
             val plain = GroupCipher.decrypt(ch.secret, body) ?: continue
             val txt = GroupCipher.parseGroupText(plain) ?: continue
-            storeObserved(ch, txt)
+            storeObserved(ch, txt, log)
             return
         }
     }
 
     /**
-     * Store an observed channel message under the channel's region-scoped conversation.
+     * Store an observed channel message under the channel's (global) conversation.
      *
      * Deduped on (timestamp, text): a flooded message reaches the broker via every node that relayed
      * it, so the same message arrives many times over.
@@ -638,10 +653,11 @@ class MeshSession(
      * Unlike [storeIncoming] this deliberately does NOT emit to [incomingMessages] — that drives phone
      * notifications, and we are observing other people's regions, not corresponding on them.
      *
-     * No SNR is recorded either: our radio never heard this. The figure the broker carries belongs to
-     * whichever node relayed it, and showing that as the message's signal would be a plain lie.
+     * The SNR/RSSI/region recorded are the *relaying* node's, not ours — our radio never heard this
+     * message; [log] is the copy that reached the broker. Surfaced on the row as observation metadata,
+     * kept from the first copy we see (the dedup below keeps the first of a flood's many arrivals).
      */
-    private fun storeObserved(ch: ObservedChannel, txt: GroupCipher.GroupText) {
+    private fun storeObserved(ch: ObservedChannel, txt: GroupCipher.GroupText, log: RxLog) {
         val convId = ch.conversationId
         val existing = _messages.value[convId].orEmpty()
         if (existing.any { it.incoming && it.timestampSecs == txt.timestamp && it.text == txt.text }) return
@@ -653,6 +669,9 @@ class MeshSession(
                 timestampSecs = txt.timestamp,
                 incoming = true,
                 status = MsgStatus.Received,
+                snrDb = log.snrDb,
+                rssi = log.rssi,
+                region = log.region,
             )
         )
         if (convId != activeConv) {
@@ -667,7 +686,7 @@ class MeshSession(
      * every observed node becomes a contact tagged with the region it was heard in (null over BLE = home).
      */
     private fun ingestAdvert(log: RxLog) {
-        val p = PacketInspector.parse(log.raw)
+        val p = log.parsed
         val key = p.advertPubKey?.takeIf { it.size >= 32 }?.copyOf(32) ?: return
         val hex = key.toHex()
         upsertObservedContact(
@@ -1856,6 +1875,7 @@ class MeshSession(
             incoming = true,
             status = MsgStatus.Received,
             snrDb = if (m.snrQ != 0) m.snrDb else null,
+            region = RADIO_REGION, // heard by our own companion radio, not observed in a named region
             authorPrefix = m.signerPrefix.takeIf { it.isNotEmpty() }?.toHex(),
         )
         appendMessage(msg)

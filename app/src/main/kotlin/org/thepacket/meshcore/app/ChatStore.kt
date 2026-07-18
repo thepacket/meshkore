@@ -58,6 +58,8 @@ class ChatStore(private val file: File) {
                                 status = runCatching { MsgStatus.valueOf(o.getString("st")) }
                                     .getOrDefault(MsgStatus.Received),
                                 snrDb = if (o.has("snr") && !o.isNull("snr")) o.getDouble("snr") else null,
+                                rssi = if (o.has("rssi") && !o.isNull("rssi")) o.getInt("rssi") else null,
+                                region = if (o.has("region") && !o.isNull("region")) o.getString("region") else null,
                                 expectedAck = o.optLong("ack", 0),
                                 authorPrefix = if (o.has("auth") && !o.isNull("auth")) o.getString("auth") else null,
                             )
@@ -84,6 +86,8 @@ class ChatStore(private val file: File) {
                         put("in", m.incoming)
                         put("st", m.status.name)
                         m.snrDb?.let { put("snr", it) }
+                        m.rssi?.let { put("rssi", it) }
+                        m.region?.let { put("region", it) }
                         if (m.expectedAck != 0L) put("ack", m.expectedAck)
                         m.authorPrefix?.let { put("auth", it) }
                     })

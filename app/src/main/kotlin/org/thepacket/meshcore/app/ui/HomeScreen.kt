@@ -1,6 +1,7 @@
 package org.thepacket.meshcore.app.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,18 +28,27 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,10 +82,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.ChannelEntry
 import org.thepacket.meshcore.app.Conversation
 import org.thepacket.meshcore.app.MeshSession
+import org.thepacket.meshcore.ble.LinkState
 import org.thepacket.meshcore.app.PublicChannel
 import org.thepacket.meshcore.app.ObservedChannel
 import org.thepacket.meshcore.app.RegionChannels
 import org.thepacket.meshcore.app.regionLabel
+import org.thepacket.meshcore.app.ALL_REGIONS
+import org.thepacket.meshcore.app.MqttPrefs
 import org.thepacket.meshcore.app.regionMatches
 import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
@@ -88,11 +101,11 @@ import kotlinx.coroutines.flow.first
 import kotlin.math.abs
 import kotlin.random.Random
 
+/** The Contacts tab: your address book (All contacts) and the companion's own slots (Device contacts). */
 @Composable
-fun HomeContent(
+fun ContactsContent(
     session: MeshSession,
     self: SelfInfo?,
-    channels: List<ChannelEntry>,
     contacts: List<Contact>,
     onOpenConversation: (id: String, title: String) -> Unit,
     modifier: Modifier = Modifier,
@@ -107,28 +120,36 @@ fun HomeContent(
     }
 
     Column(modifier.fillMaxSize()) {
-        TabRow(selectedTabIndex = tab) {
+        TabRow(selectedTabIndex = tab.coerceIn(0, 1)) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("All contacts") })
             Tab(selected = tab == 1, onClick = { onTab(1) }, text = { Text("Device contacts") })
-            Tab(selected = tab == 2, onClick = { onTab(2) }, text = { Text("Channels") })
         }
         when (tab) {
             0 -> AllContactsList(session, self, onOpenConversation, onShowOnMap)
-            1 -> ContactsList(session, self, contacts, onOpenConversation, onShowOnMap)
-            else -> {
-                // Channels follow the selected region, exactly as the contact lists do: your companion's
-                // own slots when you're looking at Home, otherwise the read-only keys we follow in the
-                // region being observed. The two never mix — different ids, separate histories.
-                val region by session.region.collectAsStateWithLifecycle()
-                val home by session.homeRegion.collectAsStateWithLifecycle()
-                if (home != null && region == home) ChannelsList(session, channels, onOpenConversation)
-                else ObservedChannelsList(session, region, onOpenConversation)
-            }
+            else -> ContactsList(session, self, contacts, onOpenConversation, onShowOnMap)
         }
     }
 
     exportedCard?.let { card ->
         ExportCardDialog(card) { exportedCard = null }
+    }
+}
+
+/** The Channels tab: the companion's own transmit slots when connected on Home, else the followed keys. */
+@Composable
+fun ChannelsContent(
+    session: MeshSession,
+    channels: List<ChannelEntry>,
+    onOpenConversation: (id: String, title: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxSize()) {
+        // Your companion's own transmit slots when you're looking at Home and connected; otherwise the
+        // keys we follow. Observed channels are global (not region-scoped) — one key, no duplicates.
+        val region by session.region.collectAsStateWithLifecycle()
+        val home by session.homeRegion.collectAsStateWithLifecycle()
+        if (home != null && region == home) ChannelsList(session, channels, onOpenConversation)
+        else ObservedChannelsList(session, onOpenConversation)
     }
 }
 
@@ -147,17 +168,19 @@ private fun AllContactsList(
     val contactMma by session.contactMma.collectAsStateWithLifecycle()
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val advertPaths by session.advertPaths.collectAsStateWithLifecycle()
+    val linkState by session.linkState.collectAsStateWithLifecycle()
+    val connected = linkState == LinkState.Connected
     var detail by remember { mutableStateOf<Contact?>(null) }
     var query by remember { mutableStateOf("") }
     var confirmSend by remember { mutableStateOf(false) }
-    // Sub-tab filter by contact type: 0 = Clients, 1 = Repeaters, 2 = Room Servers, 3 = Sensors.
+    // Local filters (dropdowns): type 0 = All, 1 = Clients, 2 = Repeaters, 3 = Room Servers, 4 = Sensors;
+    // region defaults to "All" so this tab really shows all contacts until narrowed.
     var typeFilter by remember { mutableStateOf(0) }
-    // The list shows only the region selected in Settings. Contacts heard by the companion carry no
-    // region of their own, so they belong to whichever region is set as Home.
-    val region by session.region.collectAsStateWithLifecycle()
+    var regionFilter by remember { mutableStateOf(ALL_REGIONS) }
+    // Contacts heard by the companion carry no region of their own, so they belong to Home.
     val home by session.homeRegion.collectAsStateWithLifecycle()
-    val regionScoped = remember(allContacts, region, home) {
-        allContacts.filter { regionMatches(region, regionOf(it.region, home)) }
+    val regionScoped = remember(allContacts, regionFilter, home) {
+        allContacts.filter { regionMatches(regionFilter, regionOf(it.region, home)) }
     }
 
     // Toast the outcome of a push once it completes.
@@ -187,10 +210,11 @@ private fun AllContactsList(
     val rooms = remember(regionScoped) { regionScoped.filter { it.type == ContactType.ROOM } }
     val sensors = remember(regionScoped) { regionScoped.filter { it.type == ContactType.SENSOR } }
     val byType = when (typeFilter) {
-        1 -> repeaters
-        2 -> rooms
-        3 -> sensors
-        else -> clients
+        1 -> clients
+        2 -> repeaters
+        3 -> rooms
+        4 -> sensors
+        else -> regionScoped // 0 = All types
     }
 
     val sorted = remember(byType) {
@@ -214,14 +238,23 @@ private fun AllContactsList(
                 Text(if (missingCount > 0) "  Send $missingCount to device" else "  All on device")
             }
         }
-        TypeFilterRow(
-            selected = typeFilter,
-            onSelect = { typeFilter = it },
-            clientCount = clients.size,
-            repeaterCount = repeaters.size,
-            roomCount = rooms.size,
-            sensorCount = sensors.size,
+        val regionOptions = remember {
+            MqttPrefs.REGIONS.map { (city, code) -> if (code == ALL_REGIONS) "All regions" else "$city ($code)" }
+        }
+        val regionIndex = MqttPrefs.REGIONS.indexOfFirst { it.second == regionFilter }.coerceAtLeast(0)
+        val typeOptions = listOf(
+            "All (${regionScoped.size})", "Clients (${clients.size})", "Repeaters (${repeaters.size})",
+            "Room Servers (${rooms.size})", "Sensors (${sensors.size})",
         )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterDropdown("Region", regionOptions, regionIndex, Modifier.weight(1f)) {
+                regionFilter = MqttPrefs.REGIONS[it].second
+            }
+            FilterDropdown("Type", typeOptions, typeFilter, Modifier.weight(1f)) { typeFilter = it }
+        }
         if (allContacts.isNotEmpty()) {
             CompactSearchField(
                 query = query,
@@ -230,7 +263,7 @@ private fun AllContactsList(
             )
         }
         val typeLabel = when (typeFilter) {
-            1 -> "repeaters"; 2 -> "room servers"; 3 -> "sensors"; else -> "clients"
+            1 -> "clients"; 2 -> "repeaters"; 3 -> "room servers"; 4 -> "sensors"; else -> "contacts"
         }
         if (allContacts.isEmpty()) {
             EmptyHint("No contacts collected yet.\nConnect to a device to build your address book.")
@@ -262,6 +295,10 @@ private fun AllContactsList(
     }
 
     detail?.let { c ->
+        // The bottom control actions (Share/Reset path/Export/Remove) all drive the connected
+        // companion by public key, which fails with NOT_FOUND for a contact it doesn't hold — so
+        // only offer them when this contact is actually on the device.
+        val onDevice = c.publicKey.toHex() in onDeviceKeys
         NodeDetailSheet(
             name = c.name.ifBlank { c.keyPrefixHex },
             type = c.type,
@@ -270,19 +307,24 @@ private fun AllContactsList(
             heard = null,
             self = self,
             onDismiss = { detail = null },
-            onShare = { session.shareContact(c); detail = null },
-            onResetPath = { session.resetPath(c) },
-            onExport = { session.exportContact(c); detail = null },
-            onRemove = { session.removeContact(c); session.forgetAggregateContact(c); detail = null },
-            onRequestTelemetry = { session.requestTelemetry(c) },
+            onShare = if (onDevice) ({ session.shareContact(c); detail = null }) else null,
+            onResetPath = if (onDevice) ({ session.resetPath(c) }) else null,
+            onExport = if (onDevice) ({ session.exportContact(c); detail = null }) else null,
+            onRemove = if (onDevice) ({ session.removeContact(c); session.forgetAggregateContact(c); detail = null }) else null,
+            // Telemetry, MMA and path discovery are all OTA requests to the companion by public key —
+            // NOT_FOUND for an off-device contact — so only offer them when it's on the device. The
+            // advert-path lookup below stays: it's a harmless local cache read.
+            onRequestTelemetry = if (onDevice) ({ session.requestTelemetry(c) }) else null,
             telemetry = contactTelemetry[c.keyPrefixHex],
-            onRequestMma = { session.requestContactMma(c) },
+            onRequestMma = if (onDevice) ({ session.requestContactMma(c) }) else null,
             mma = contactMma[c.keyPrefixHex],
             onManage = null,
             onShowOnMap = onShowOnMap,
-            onDiscoverPath = { session.discoverPath(c.publicKey) },
+            onDiscoverPath = if (onDevice) ({ session.discoverPath(c.publicKey) }) else null,
             pathResult = pathDiscovery[c.keyPrefixHex],
-            onRequestAdvertPath = { session.requestAdvertPath(c) },
+            // Advert-path queries a heard-adverts cache (not the contact store), so it's useful for any
+            // node the radio has heard — but it still needs a connected companion to ask.
+            onRequestAdvertPath = if (connected) ({ session.requestAdvertPath(c) }) else null,
             advertPath = advertPaths[c.keyPrefixHex],
             advertPathLoaded = advertPaths.containsKey(c.keyPrefixHex),
         )
@@ -299,7 +341,7 @@ private fun AllContactsList(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { confirmSend = false; session.pushAllContactsToDevice(region) }) {
+                TextButton(onClick = { confirmSend = false; session.pushAllContactsToDevice(regionFilter) }) {
                     Text("Send")
                 }
             },
@@ -333,6 +375,32 @@ private fun TypeFilterRow(
     }
 }
 
+/** A compact read-only dropdown used for the All-contacts region/type filters. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FilterDropdown(
+    label: String,
+    options: List<String>,
+    index: Int,
+    modifier: Modifier = Modifier,
+    onIndex: (Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = modifier) {
+        OutlinedTextField(
+            value = options[index.coerceIn(options.indices)], onValueChange = {}, readOnly = true,
+            singleLine = true, label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEachIndexed { i, o ->
+                DropdownMenuItem(text = { Text(o) }, onClick = { onIndex(i); expanded = false })
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ContactsList(
@@ -353,6 +421,7 @@ private fun ContactsList(
     val pathDiscovery by session.pathDiscovery.collectAsStateWithLifecycle()
     val advertPaths by session.advertPaths.collectAsStateWithLifecycle()
     val unread by session.unread.collectAsStateWithLifecycle()
+    val connected = session.linkState.collectAsStateWithLifecycle().value == LinkState.Connected
     val listState = rememberLazyListState()
 
     // Repeater/room management takes over the whole pane when open.
@@ -501,7 +570,7 @@ private fun ContactsList(
             onShowOnMap = onShowOnMap,
             onDiscoverPath = { session.discoverPath(c.publicKey) },
             pathResult = pathDiscovery[c.keyPrefixHex],
-            onRequestAdvertPath = { session.requestAdvertPath(c) },
+            onRequestAdvertPath = if (connected) ({ session.requestAdvertPath(c) }) else null,
             advertPath = advertPaths[c.keyPrefixHex],
             advertPathLoaded = advertPaths.containsKey(c.keyPrefixHex),
         )
@@ -631,7 +700,6 @@ private fun ChannelsList(
 @Composable
 private fun ObservedChannelsList(
     session: MeshSession,
-    region: String,
     onOpen: (String, String) -> Unit,
 ) {
     val all by session.observedChannels.collectAsStateWithLifecycle()
@@ -639,10 +707,15 @@ private fun ObservedChannelsList(
     val ctx = LocalContext.current
     var addingCatalog by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
-    var removing by remember { mutableStateOf<ObservedChannel?>(null) }
+    var menuFor by remember { mutableStateOf<ObservedChannel?>(null) }   // long-press options menu
+    var editing by remember { mutableStateOf<ObservedChannel?>(null) }   // Edit channel dialog
+    var confirmDelete by remember { mutableStateOf<ObservedChannel?>(null) }
+    var stub by remember { mutableStateOf<String?>(null) }               // "coming soon" feature name
 
-    val channels = remember(all, region) {
-        all.filter { regionMatches(region, it.region) }.sortedBy { it.displayName.lowercase() }
+    // Channels are global — one row per key, no region duplicates. distinctBy guards against any
+    // legacy per-region entries lingering in memory before the store rewrites them.
+    val channels = remember(all) {
+        all.distinctBy { it.conversationId }.sortedBy { it.displayName.lowercase() }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -652,7 +725,7 @@ private fun ObservedChannelsList(
         ) {
             OutlinedButton(onClick = { creating = true }) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Text("  Add key")
+                Text("  Add channel")
             }
             OutlinedButton(onClick = { addingCatalog = true }) {
                 Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -661,8 +734,8 @@ private fun ObservedChannelsList(
         }
         if (channels.isEmpty()) {
             EmptyHint(
-                "No channels followed in ${regionLabel(region)}. Add a key to read this region's traffic — " +
-                    "you're observing, so nothing here can be sent to."
+                "No channels followed. Add a key to read a channel's traffic — you're observing, so " +
+                    "nothing here can be sent to."
             )
         } else {
             LazyColumn(
@@ -675,9 +748,9 @@ private fun ObservedChannelsList(
                         icon = Icons.Default.Campaign,
                         tint = MaterialTheme.colorScheme.tertiary,
                         title = ch.displayName,
-                        subtitle = "${regionLabel(region)} · read-only · long-press to remove",
+                        subtitle = "long-press for options",
                         onClick = { onOpen(ch.conversationId, ch.displayName) },
-                        onLongClick = { removing = ch },
+                        onLongClick = { menuFor = ch },
                         unread = unread[ch.conversationId] ?: 0,
                     )
                 }
@@ -689,7 +762,7 @@ private fun ObservedChannelsList(
         RegionChannelsDialog(
             freeSlots = null, // observed channels have no slots to run out of
             onAdd = { picked ->
-                val n = session.addObservedChannels(region, picked.map { it.name to it.secret })
+                val n = session.addObservedChannels(picked.map { it.name to it.secret })
                 Toast.makeText(
                     ctx,
                     if (n == 0) "Already following those" else "Now following $n channel(s)",
@@ -703,47 +776,106 @@ private fun ObservedChannelsList(
 
     if (creating) {
         ObservedChannelDialog(
-            region = region,
             onDismiss = { creating = false },
             onSave = { name, secret ->
-                val n = session.addObservedChannels(region, listOf(name to secret))
+                val n = session.addObservedChannels(listOf(name to secret))
                 if (n == 0) Toast.makeText(ctx, "Already following that key", Toast.LENGTH_SHORT).show()
                 creating = false
             },
         )
     }
 
-    removing?.let { ch ->
+    editing?.let { ch ->
+        ObservedChannelDialog(
+            title = "Edit channel",
+            confirmLabel = "Save",
+            initialName = ch.name,
+            initialSecret = ch.secret,
+            onDismiss = { editing = null },
+            onSave = { name, secret ->
+                session.updateObservedChannel(ch, name, secret)
+                editing = null
+            },
+        )
+    }
+
+    // Long-press options for a followed channel. Edit/Delete work; the rest are placeholders for now.
+    menuFor?.let { ch ->
         AlertDialog(
-            onDismissRequest = { removing = null },
-            title = { Text("Stop following?") },
+            onDismissRequest = { menuFor = null },
+            title = { Text(ch.displayName) },
+            text = {
+                Column {
+                    ChannelMenuItem("Edit channel", Icons.Default.Edit) { menuFor = null; editing = ch }
+                    ChannelMenuItem("Mute Channel", Icons.Default.NotificationsOff) { menuFor = null; stub = "Mute Channel" }
+                    ChannelMenuItem("Delete channel", Icons.Default.Delete) { menuFor = null; confirmDelete = ch }
+                    ChannelMenuItem("Message Retention", Icons.Default.Schedule) { menuFor = null; stub = "Message Retention" }
+                    ChannelMenuItem("Participants", Icons.Default.People) { menuFor = null; stub = "Participants" }
+                    ChannelMenuItem("Blocked Senders", Icons.Default.Block) { menuFor = null; stub = "Blocked Senders" }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { menuFor = null }) { Text("Close") } },
+        )
+    }
+
+    confirmDelete?.let { ch ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Delete channel?") },
             text = {
                 Text(
-                    "${ch.displayName} in ${regionLabel(region)} will stop being decoded. Messages already " +
-                        "collected are kept — add the key back and they reappear."
+                    "${ch.displayName} will stop being decoded. Messages already collected are kept — " +
+                        "add the channel back and they reappear."
                 )
             },
             confirmButton = {
-                TextButton(onClick = { session.removeObservedChannel(ch); removing = null }) { Text("Stop") }
+                TextButton(onClick = { session.removeObservedChannel(ch); confirmDelete = null }) { Text("Delete") }
             },
-            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
+        )
+    }
+
+    stub?.let { feature ->
+        AlertDialog(
+            onDismissRequest = { stub = null },
+            title = { Text(feature) },
+            text = { Text("Coming soon.") },
+            confirmButton = { TextButton(onClick = { stub = null }) { Text("OK") } },
         )
     }
 }
 
+/** One row in the channel long-press options menu. */
+@Composable
+private fun ChannelMenuItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+    }
+}
+
 /**
- * Add a key to follow in an observed region: a name plus either a 128-bit hex key, a scanned
- * channel-key QR, or a `#hashtag` name whose key derives from the name itself.
+ * Add or edit a followed channel: a name plus either a 128-bit hex key, a scanned channel-key QR, or a
+ * `#hashtag` name whose key derives from the name itself. Prefilled from [initialName]/[initialSecret]
+ * when editing.
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun ObservedChannelDialog(
-    region: String,
     onDismiss: () -> Unit,
     onSave: (name: String, secret: ByteArray) -> Unit,
+    title: String = "Follow a channel",
+    confirmLabel: String = "Follow",
+    initialName: String = "",
+    initialSecret: ByteArray? = null,
 ) {
-    var name by remember { mutableStateOf("") }
-    var secretHex by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf(initialName) }
+    var secretHex by remember { mutableStateOf(initialSecret?.toHex() ?: "") }
     val cleanSecret = secretHex.trim().replace(" ", "").lowercase()
     val secretValid = cleanSecret.length == 32 && cleanSecret.all { it in "0123456789abcdef" }
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -751,7 +883,7 @@ private fun ObservedChannelDialog(
     }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Follow a channel in ${regionLabel(region)}") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -779,7 +911,7 @@ private fun ObservedChannelDialog(
             TextButton(
                 onClick = { onSave(name.trim(), cleanSecret.hexToBytes()) },
                 enabled = name.isNotBlank() && secretValid,
-            ) { Text("Follow") }
+            ) { Text(confirmLabel) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

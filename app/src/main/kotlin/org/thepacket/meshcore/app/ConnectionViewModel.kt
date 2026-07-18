@@ -24,7 +24,7 @@ sealed interface Screen {
 }
 
 /** Bottom-nav tabs within the connected (Main) screen. */
-enum class MainTab { Chats, Heard, Packets, Stats, Map, Tools, Settings }
+enum class MainTab { Channels, Contacts, Heard, Packets, Map, Tools, Settings }
 
 /** Connection / scanning state (chat + instrumentation state live in [MeshSession]). */
 data class UiState(
@@ -33,16 +33,17 @@ data class UiState(
     val linkState: LinkState = LinkState.Disconnected,
     val error: String? = null,
     val screen: Screen = Screen.Connect,
-    val tab: MainTab = MainTab.Chats,
-    /** Chats sub-tab: 0 = Contacts, 1 = Channels. Hoisted so it survives entering a conversation. */
-    val chatsTab: Int = 0,
+    val tab: MainTab = MainTab.Channels,
+    /** Contacts sub-tab: 0 = All contacts, 1 = Device contacts. Hoisted so it survives entering a conversation. */
+    val contactsTab: Int = 0,
     /** When set, the Map tab should centre on these coordinates (lat, lon in degrees). */
     val mapFocus: Pair<Double, Double>? = null,
     /** Observer mode: viewing the app (e.g. the MQTT feed) with no BLE device connected. */
     val observing: Boolean = false,
     /** Packet monitor view state, hoisted so it persists across tab switches for the app's lifetime. */
     val packetFilter: PacketFilter = PacketFilter(),
-    val packetGroupByHash: Boolean = true,
+    /** Packet monitor pause switch. Not paused by default — the monitor processes until paused. */
+    val packetMonitorPaused: Boolean = false,
 )
 
 class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
@@ -173,19 +174,15 @@ class ConnectionViewModel(app: Application) : AndroidViewModel(app) {
     /** The Map consumed its pending focus target. */
     fun consumeMapFocus() = _ui.update { it.copy(mapFocus = null) }
 
-    fun setChatsTab(index: Int) = _ui.update { it.copy(chatsTab = index) }
+    fun setContactsTab(index: Int) = _ui.update { it.copy(contactsTab = index) }
 
     // ---- packet monitor view state ----
     fun setPacketFilter(filter: PacketFilter) = _ui.update { it.copy(packetFilter = filter) }
-    fun setPacketGroupByHash(on: Boolean) = _ui.update { it.copy(packetGroupByHash = on) }
+    fun setPacketMonitorPaused(paused: Boolean) = _ui.update { it.copy(packetMonitorPaused = paused) }
 
     fun openConversation(id: String, title: String) {
         session.setActiveConversation(id)
-        // Remember which sub-tab this conversation belongs to, so leaving it returns there.
-        // Channels are the 3rd Chats sub-tab (index 2); for a DM keep the current contacts
-        // sub-tab (All contacts = 0 or Device contacts = 1) the user opened it from.
-        val chatsTab = if (id.startsWith("ch:")) 2 else _ui.value.chatsTab.coerceIn(0, 1)
-        _ui.update { it.copy(screen = Screen.Conversation(id, title), chatsTab = chatsTab) }
+        _ui.update { it.copy(screen = Screen.Conversation(id, title)) }
     }
 
     fun backToHome() {

@@ -49,6 +49,15 @@ class MqttPrefs(context: Context) {
         get() = prefs.getString(KEY_PASS, "") ?: ""
         set(v) { prefs.edit().putString(KEY_PASS, v.trim()).apply() }
 
+    /**
+     * Stop the feed while the app is backgrounded and resume it on return, to save battery — the
+     * all-regions feed is a firehose, and collecting it with no screen watching is wasted power.
+     * On by default; turn off to keep observing in the background.
+     */
+    var pauseInBackground: Boolean
+        get() = prefs.getBoolean(KEY_PAUSE_BG, true)
+        set(v) { prefs.edit().putBoolean(KEY_PAUSE_BG, v).apply() }
+
     companion object {
         /** Region the feed observes until the user picks another. Says nothing about where *they* are. */
         const val DEFAULT_REGION = "YOW" // Ottawa
@@ -124,5 +133,6 @@ class MqttPrefs(context: Context) {
         private const val KEY_HOME = "home"
         private const val KEY_USER = "user"
         private const val KEY_PASS = "pass"
+        private const val KEY_PAUSE_BG = "pause_bg"
     }
 }

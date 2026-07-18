@@ -13,6 +13,12 @@ const val HOME_UNSET = "HOME"
  */
 const val ALL_REGIONS = "+"
 
+/**
+ * Region tag for a message our own companion radio received (as opposed to one observed over MQTT in
+ * a named region). Shown on the chat row as "radio". Lowercase, so it can't collide with an IATA code.
+ */
+const val RADIO_REGION = "radio"
+
 /** Whether a view on [selected] should show an item filed under [itemRegion]. "All" matches everything. */
 fun regionMatches(selected: String, itemRegion: String): Boolean =
     selected == ALL_REGIONS || selected == itemRegion
@@ -30,4 +36,5 @@ fun regionOf(region: String?, home: String?): String = region ?: home ?: HOME_UN
 /** Label for [region] in the UI, spelling out the unset-Home bucket. */
 fun regionLabel(region: String): String =
     if (region == HOME_UNSET) "Home (not set)"
+    else if (region == RADIO_REGION) "radio"
     else MqttPrefs.REGIONS.firstOrNull { it.second == region }?.first ?: region

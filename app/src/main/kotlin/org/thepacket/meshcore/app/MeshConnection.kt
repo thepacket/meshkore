@@ -3,6 +3,9 @@ package org.thepacket.meshcore.app
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,11 +61,32 @@ object MeshConnection {
         val app = context.applicationContext
         scanner = CompanionScanner(app)
         link = NordicMeshCoreLink(app)
-        session = MeshSession(link, scope, ChatStore(app), AdminPrefs(app), ContactStore(app), PacketStore(app), ContactPrefs(app),
+        // Packet persistence is deactivated: pass null so every packetStore?.save/load in MeshSession
+        // is a no-op. PacketStore is left intact — swap `null` back to `PacketStore(app)` to re-enable.
+        session = MeshSession(link, scope, ChatStore(app), AdminPrefs(app), ContactStore(app), null, ContactPrefs(app),
             ObservedChannelStore(app),
             initialRegion = MqttPrefs(app).region, initialHomeRegion = MqttPrefs(app).homeRegion)
         mqtt = MqttPacketSource(session::injectPacket)
         MqttPrefs(app).let { if (it.enabled) mqtt.start(it.brokerUrls, it.topic, it.username, it.password, it.broker) }
+        observeAppLifecycle(app)
         initialized = true
+    }
+
+    /**
+     * When the "pause feed in background" MQTT setting is on, stop the feed as the whole app goes to
+     * the background and restart it on return — so the all-regions firehose isn't ingested with no
+     * screen watching. No-op when the feed is off or the setting is disabled.
+     */
+    private fun observeAppLifecycle(app: Context) {
+        ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            val prefs = MqttPrefs(app)
+            if (!prefs.enabled || !prefs.pauseInBackground) return@LifecycleEventObserver
+            when (event) {
+                Lifecycle.Event.ON_STOP -> mqtt.stop()
+                Lifecycle.Event.ON_START ->
+                    mqtt.start(prefs.brokerUrls, prefs.topic, prefs.username, prefs.password, prefs.broker)
+                else -> Unit
+            }
+        })
     }
 }

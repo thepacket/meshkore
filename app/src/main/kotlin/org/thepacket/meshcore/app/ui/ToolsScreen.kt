@@ -109,6 +109,10 @@ fun ToolsContent(
             "trace" -> TraceTool(session, self) { open = null }
             "discover" -> DiscoverTool(session, self, onShowOnMap) { open = null }
             "rawdata" -> RawDataTool(session, contacts, ::notify) { open = null }
+            "stats" -> Column(Modifier.fillMaxSize()) {
+                ToolHeader("Statistics") { open = null }
+                StatsContent(session)
+            }
             "topology" -> MeshTopologyScreen(session, onShowOnMap) { open = null }
             "talkers" -> AnalyticsTool("Top Talkers", { open = null }) { TopTalkersCard(session) }
             "regions" -> AnalyticsTool("Top Regions", { open = null }) { TopRegionsCard(session) }
@@ -156,6 +160,8 @@ fun ToolsContent(
                     "Send a raw custom-payload packet to a contact, and view received raw data.", enabled = connected) {
                     open = "rawdata"
                 }
+                ToolRow(Icons.Default.BarChart, "Statistics",
+                    "Address book, traffic, MQTT feed, and device/radio stats.") { open = "stats" }
 
                 // Analytics tools work from the recorded packet history (with or without a device).
                 Text("Analytics", style = MaterialTheme.typography.labelLarge,

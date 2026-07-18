@@ -15,6 +15,8 @@ import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.hexToBytes
 import java.net.URI
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicLongArray
 import kotlin.math.roundToInt
 
 sealed interface MqttStatus {
@@ -44,6 +46,13 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     /** Times the feed failed over from one broker to another. */
     private val _brokerChanges = MutableStateFlow(0L)
     val brokerChanges: StateFlow<Long> = _brokerChanges.asStateFlow()
+
+    // The received/fromBroker totals live outside their StateFlows: the MQTT callback bumps these cheap
+    // atomics on every packet and only *publishes* a snapshot at most every STATS_PUBLISH_MS. A busy
+    // all-regions feed was emitting (and recomposing the Stats card) once per packet — this caps it.
+    private val receivedCount = AtomicLong(0)
+    @Volatile private var brokerCounts = AtomicLongArray(0)
+    @Volatile private var lastStatsPublishMs = 0L
 
     @Volatile private var client: Mqtt3AsyncClient? = null
 
@@ -77,6 +86,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
             authFailures = 0
             // Keep accumulated per-broker counts across reconnects; (re)size if the broker list changed.
             if (_fromBroker.value.size != brokers.size) _fromBroker.value = List(brokers.size) { 0L }
+            syncCountersFromFlows()
             val b = brokers[activeIndex]
             Log.d(TAG, "connecting host=${b.host} port=${b.port} path=/${b.path} topic=$topic auth=${username.isNotBlank()}")
 
@@ -113,6 +123,7 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     private fun onDisconnected(ctx: MqttClientDisconnectedContext) {
         // We disconnected on purpose (stop()) — stay down, don't reconnect.
         if (ctx.source == MqttDisconnectSource.USER) return
+        publishStats(force = true) // don't leave the last packets stuck behind the throttle
         _disconnections.value++
         val msg = ctx.cause.message ?: "disconnected"
         Log.w(TAG, "disconnected (${ctx.source}): $msg")
@@ -174,13 +185,14 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
                 // Topic is meshcore/<region>/<node>/packets — the region disambiguates 1-byte hop hashes.
                 val region = publish.topic.toString().split('/').getOrNull(1)?.takeIf { it.isNotBlank() && it != "+" }
                 val log = parse(String(publish.payloadAsBytes, Charsets.UTF_8), region) ?: return@callback
-                if (_received.value == 0L) Log.d(TAG, "first packet injected: ${log.raw.size}B")
                 onPacket(log)
-                _received.value++
+                val total = receivedCount.incrementAndGet()
+                if (total == 1L) Log.d(TAG, "first packet injected: ${log.raw.size}B")
                 // Attribute to the broker currently serving the feed.
                 val idx = activeIndex
-                _fromBroker.value = _fromBroker.value.toMutableList()
-                    .also { if (idx in it.indices) it[idx] = it[idx] + 1 }
+                val bc = brokerCounts
+                if (idx in 0 until bc.length()) bc.incrementAndGet(idx)
+                publishStats(force = false)
             }
             .send()
             .whenComplete { _: Mqtt3SubAck?, ex: Throwable? ->
@@ -192,7 +204,30 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
     fun stop() {
         client?.let { runCatching { it.disconnect() } }
         client = null
+        publishStats(force = true) // flush any counts still held back by the throttle
         _status.value = MqttStatus.Disconnected
+    }
+
+    /** Seed the cheap per-packet counters from the currently-published totals (called on each (re)start). */
+    private fun syncCountersFromFlows() {
+        receivedCount.set(_received.value)
+        val arr = AtomicLongArray(brokers.size)
+        _fromBroker.value.forEachIndexed { i, v -> if (i < arr.length()) arr.set(i, v) }
+        brokerCounts = arr
+    }
+
+    /**
+     * Publish the per-packet counters into [received]/[fromBroker] at most once per STATS_PUBLISH_MS
+     * (or immediately when [force] is set, e.g. on disconnect) so the Stats card recomposes at a
+     * bounded rate instead of once per packet under a busy feed.
+     */
+    private fun publishStats(force: Boolean) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastStatsPublishMs < STATS_PUBLISH_MS) return
+        lastStatsPublishMs = now
+        _received.value = receivedCount.get()
+        val bc = brokerCounts
+        _fromBroker.value = List(bc.length()) { bc.get(it) }
     }
 
     /**
@@ -215,5 +250,6 @@ class MqttPacketSource(private val onPacket: (RxLog) -> Unit) {
         const val RECONNECT_DELAY_MS = 3000L // wait before each reconnect/failover attempt
         const val AUTH_RETRY_DELAY_MS = 5000L // device-signing auth refuses transiently; back off longer before retrying
         const val MAX_AUTH_FAILURES = 5 // consecutive CONNECT refusals before surfacing a hard bad-token error
+        const val STATS_PUBLISH_MS = 400L // bound how often received/fromBroker recompose the Stats card
     }
 }

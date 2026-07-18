@@ -251,6 +251,15 @@ data class RxLog(
     val routeName: String get() = RouteType.name(routeType)
     val hex: String get() = raw.toHex()
 
+    /**
+     * Full structural decode of [raw], parsed once and cached for the life of this instance.
+     * The same RxLog objects flow through ingestion and every UI derivation (filters, node
+     * resolution, grouping, per-row rendering), so they all share this one parse instead of
+     * re-decoding the same bytes on the main thread. Thread-safe: ingestion and Compose may
+     * touch it concurrently.
+     */
+    val parsed: ParsedPacket by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { PacketInspector.parse(raw) }
+
     override fun equals(other: Any?) = other is RxLog && raw.contentEquals(other.raw) && rssi == other.rssi
     override fun hashCode() = raw.contentHashCode() * 31 + rssi
 }

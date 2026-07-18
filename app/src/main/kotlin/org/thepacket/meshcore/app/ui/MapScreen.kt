@@ -34,7 +34,10 @@ import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.thepacket.meshcore.app.ALL_REGIONS
 import org.thepacket.meshcore.app.HeardEntry
+import org.thepacket.meshcore.app.regionMatches
+import org.thepacket.meshcore.app.regionOf
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
 import org.thepacket.meshcore.protocol.SelfInfo
@@ -61,6 +64,10 @@ fun MapContent(
     contacts: List<Contact>,
     heard: List<HeardEntry>,
     modifier: Modifier = Modifier,
+    // Scope the map to a region ("+" / ALL_REGIONS shows everything). [homeRegion] resolves region-less
+    // (companion-heard) contacts. Defaults show all, so the trace/topology maps stay unfiltered.
+    selectedRegion: String = ALL_REGIONS,
+    homeRegion: String? = null,
     // When set, centre the map on these coordinates once, then call [onFocusConsumed].
     focus: Pair<Double, Double>? = null,
     onFocusConsumed: () -> Unit = {},
@@ -70,7 +77,9 @@ fun MapContent(
     tracePath: List<Contact> = emptyList(),
     onAddTrace: (Contact) -> Unit = {},
 ) {
-    val nodes = remember(self, contacts, heard) { collectNodes(self, contacts, heard) }
+    val nodes = remember(self, contacts, heard, selectedRegion, homeRegion) {
+        collectNodes(self, contacts, heard, selectedRegion, homeRegion)
+    }
     // Caches so re-clustering on pan/zoom reuses marker bitmaps.
     val nodeIcons = remember { mutableMapOf<String, NodeIcon>() }
     val clusterIcons = remember { mutableMapOf<Int, Drawable>() }
@@ -436,9 +445,20 @@ private fun makeClusterIcon(res: Resources, count: Int): Drawable {
     return BitmapDrawable(res, bmp)
 }
 
-private fun collectNodes(self: SelfInfo?, contacts: List<Contact>, heard: List<HeardEntry>): List<MapNode> {
+private fun collectNodes(
+    self: SelfInfo?,
+    contacts: List<Contact>,
+    heard: List<HeardEntry>,
+    selectedRegion: String,
+    homeRegion: String?,
+): List<MapNode> {
+    // Scope to the selected region. Contacts carry their region; region-less ones resolve to Home.
+    val regionContacts = contacts.filter { regionMatches(selectedRegion, regionOf(it.region, homeRegion)) }
+    // Heard entries carry no region (the list is region-mixed), so they can only be placed safely when
+    // viewing all regions — for a specific region we show region-attributed contacts only.
+    val allRegions = selectedRegion == ALL_REGIONS
     val byKey = LinkedHashMap<String, MapNode>()
-    contacts.forEach { c ->
+    regionContacts.forEach { c ->
         if (c.gpsLat != 0 || c.gpsLon != 0) {
             val h = heard.firstOrNull { it.pubKeyHex.startsWith(c.keyPrefixHex) } // attach signal if heard
             byKey[c.keyPrefixHex] = MapNode(
@@ -447,15 +467,17 @@ private fun collectNodes(self: SelfInfo?, contacts: List<Contact>, heard: List<H
             )
         }
     }
-    heard.forEach { h ->
+    if (allRegions) heard.forEach { h ->
         val coveredByContact = contacts.any { h.pubKeyHex.startsWith(it.keyPrefixHex) && (it.gpsLat != 0 || it.gpsLon != 0) }
         if (h.hasGps && !coveredByContact && !byKey.containsKey(h.pubKeyHex)) {
             byKey[h.pubKeyHex] = MapNode(h.name, h.latDeg, h.lonDeg, h.type, false, heard = h)
         }
     }
     val list = byKey.values.toMutableList()
-    // Show our own node only if it already advertises a position (read-only; we never set it).
-    if (self != null && (self.advLat != 0 || self.advLon != 0)) {
+    // Show our own node only if it advertises a position (read-only) and its home region is in view.
+    if (self != null && (self.advLat != 0 || self.advLon != 0) &&
+        regionMatches(selectedRegion, regionOf(null, homeRegion))
+    ) {
         list.add(0, MapNode(self.name.ifBlank { "This node" }, self.advLat / 1e6, self.advLon / 1e6,
             ContactType.CHAT, true, self = self))
     }

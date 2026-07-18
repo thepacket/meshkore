@@ -81,9 +81,8 @@ class MainActivity : ComponentActivity() {
             val contacts by vm.session.contacts.collectAsStateWithLifecycle()
             val allContacts by vm.session.allContacts.collectAsStateWithLifecycle()
             val messages by vm.session.messages.collectAsStateWithLifecycle()
-            // The packet monitor shows the currently-selected region's collected packets — the same
-            // persisted store the analytics read, so it survives restarts and BLE drops.
-            val packets by vm.session.packetHistory.collectAsStateWithLifecycle()
+            // packetHistory is NOT collected here — PacketMonitorContent subscribes it itself, so the
+            // expensive all-regions flatten/sort only runs while the Packets tab is actually on screen.
             val region by vm.session.region.collectAsStateWithLifecycle()
             val heard by vm.session.heard.collectAsStateWithLifecycle()
             val radio by vm.session.radioStats.collectAsStateWithLifecycle()
@@ -116,7 +115,6 @@ class MainActivity : ComponentActivity() {
                         channels = channels,
                         contacts = contacts,
                         allContacts = allContacts,
-                        packets = packets,
                         heard = heard,
                         radio = radio,
                         core = core,
@@ -127,12 +125,12 @@ class MainActivity : ComponentActivity() {
                         mapFocus = state.mapFocus,
                         onShowOnMap = vm::showOnMap,
                         onMapFocusConsumed = vm::consumeMapFocus,
-                        chatsTab = state.chatsTab,
-                        onChatsTab = vm::setChatsTab,
+                        contactsTab = state.contactsTab,
+                        onContactsTab = vm::setContactsTab,
                         packetFilter = state.packetFilter,
                         onPacketFilter = vm::setPacketFilter,
-                        packetGroupByHash = state.packetGroupByHash,
-                        onPacketGroupByHash = vm::setPacketGroupByHash,
+                        packetMonitorPaused = state.packetMonitorPaused,
+                        onPacketMonitorPaused = vm::setPacketMonitorPaused,
                     )
                     is Screen.Conversation -> {
                         // A room-server conversation gets a login banner + per-post authors.

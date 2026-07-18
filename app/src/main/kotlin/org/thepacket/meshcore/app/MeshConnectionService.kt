@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,6 +42,11 @@ class MeshConnectionService : Service() {
         MeshConnection.init(this)
         prefs = NotifyPrefs(this)
         createChannels()
+        // Refresh the notification when the app goes background/foreground, so the MQTT line can reflect
+        // the feed being paused in the background. Only affects the MQTT-only text (BLE lines untouched).
+        ProcessLifecycleOwner.get().lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START || event == Lifecycle.Event.ON_STOP) startForegroundConnection()
+        })
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -78,10 +84,17 @@ class MeshConnectionService : Service() {
     private fun startForegroundConnection() {
         val bleUp = MeshConnection.link.state.value == LinkState.Connected
         val name = session.self.value?.name?.takeIf { it.isNotBlank() } ?: "MeshCore device"
-        val mqttOn = MqttPrefs(this).enabled
+        val mqttPrefs = MqttPrefs(this)
+        val mqttOn = mqttPrefs.enabled
+        // The feed is paused when it's enabled with "pause in background" on and the app isn't foreground.
+        val foreground = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        val mqttPaused = mqttOn && mqttPrefs.pauseInBackground && !foreground
         val text = when {
+            // The BLE part ("Listening to <name>") is unchanged; only the MQTT suffix reflects paused.
+            bleUp && mqttPaused -> "Listening to $name · MQTT feed paused"
             bleUp && mqttOn -> "Listening to $name + MQTT feed"
             bleUp -> "Listening for messages from $name"
+            mqttPaused -> "MQTT feed paused (app in background)"
             mqttOn -> "Collecting live packets over MQTT"
             else -> "Running"
         }

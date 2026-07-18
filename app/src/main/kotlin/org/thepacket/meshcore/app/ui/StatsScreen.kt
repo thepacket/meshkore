@@ -60,7 +60,6 @@ import org.thepacket.meshcore.protocol.GroupCipher
 import org.thepacket.meshcore.protocol.CoreStats
 import org.thepacket.meshcore.protocol.LoRaAirtime
 import org.thepacket.meshcore.protocol.Lpp
-import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.PacketStats
 import org.thepacket.meshcore.protocol.ParsedPacket
 import org.thepacket.meshcore.protocol.PayloadType
@@ -77,14 +76,11 @@ import kotlin.math.sqrt
 @Composable
 fun StatsContent(
     session: MeshSession,
-    radio: RadioStats?,
-    core: CoreStats?,
-    packets: PacketStats?,
-    noiseHistory: List<Int>,
-    telemetry: List<Lpp.Reading>,
-    onRefreshTelemetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val radio by session.radioStats.collectAsStateWithLifecycle()
+    val core by session.coreStats.collectAsStateWithLifecycle()
+    val noiseHistory by session.noiseHistory.collectAsStateWithLifecycle()
     Column(
         modifier
             .fillMaxSize()
@@ -241,7 +237,7 @@ internal fun TopTalkersCard(session: MeshSession) {
         val agg = HashMap<String, DoubleArray>() // node id -> [count, airtimeMs]
         val info = HashMap<String, ResolvedNode>()
         history.forEach { pkt ->
-            val p = PacketInspector.parse(pkt.raw)
+            val p = pkt.parsed
             val byte = sourceByte(p) ?: return@forEach
             val rn = resolver.resolve(pkt.region, byte) // resolve the source within the packet's region
             val a = agg.getOrPut(rn.id) { DoubleArray(2) }
@@ -741,7 +737,7 @@ private fun hopStats(history: List<RxLog>): HopStats? {
     var direct = 0
     val hops = ArrayList<Int>()
     for (pkt in history) {
-        val p = PacketInspector.parse(pkt.raw)
+        val p = pkt.parsed
         if (p.payloadType == PayloadType.TRACE) continue // path field holds SNRs, not hop hashes
         val n = p.pathHashes.size
         if (n <= 0) direct++ else hops.add(n)
@@ -770,7 +766,7 @@ internal class NodeResolver(history: List<RxLog>, val contacts: List<Contact>, p
     private val adv = HashMap<Pair<String, Int>, Pair<ByteArray, String?>>() // (region, byte) -> (key, name)
     init {
         for (pkt in history) {
-            val p = PacketInspector.parse(pkt.raw)
+            val p = pkt.parsed
             val key = p.advertPubKey?.takeIf { it.size >= 32 } ?: continue
             adv.putIfAbsent(regionOf(pkt.region, home) to (key[0].toInt() and 0xFF),
                 key.copyOf(32) to p.advertName?.trim()?.takeIf { it.isNotBlank() })
@@ -810,7 +806,7 @@ internal fun TopRepeatersCard(session: MeshSession) {
         val counts = HashMap<String, Int>()
         val info = HashMap<String, ResolvedNode>()
         for (pkt in history) {
-            val p = PacketInspector.parse(pkt.raw)
+            val p = pkt.parsed
             if (p.payloadType == PayloadType.TRACE) continue // path field holds SNRs, not hop hashes
             p.pathHashes.forEach { h ->
                 val rn = resolver.resolve(pkt.region, h)
@@ -854,7 +850,7 @@ internal fun TopSendersCard(session: MeshSession) {
             observed.map { ChannelEntry(index = -1, name = it.displayName, secret = it.secret) }
         val counts = HashMap<String, Int>()
         for (pkt in history) {
-            val p = PacketInspector.parse(pkt.raw)
+            val p = pkt.parsed
             if (p.payloadType != PayloadType.GRP_TXT) continue
             val name = channelSender(p, channels)
             counts[name] = (counts[name] ?: 0) + 1
@@ -931,7 +927,7 @@ internal fun RepeaterPairHeatmapCard(
         val counts = HashMap<Pair<String, String>, Int>()
         val info = HashMap<String, ResolvedNode>()
         for (pkt in history) {
-            val p = PacketInspector.parse(pkt.raw)
+            val p = pkt.parsed
             if (p.payloadType == PayloadType.TRACE) continue
             // Resolve each hop within this packet's region, then count every distinct co-occurring pair.
             val nodes = p.pathHashes.map { resolver.resolve(pkt.region, it) }.distinctBy { it.id }
@@ -1015,7 +1011,7 @@ internal fun HopDistanceCard(session: MeshSession) {
         val selfPos = self?.let { if (it.advLat != 0 || it.advLon != 0) (it.advLat / 1e6) to (it.advLon / 1e6) else null }
         val dists = ArrayList<Double>()
         for (pkt in history) {
-            val p = PacketInspector.parse(pkt.raw)
+            val p = pkt.parsed
             if (p.payloadType == PayloadType.TRACE || p.pathHashes.isEmpty()) continue
             val r = regionOf(pkt.region, home)
             // Chain: source → relays → this node; distance each leg where both ends are positioned.

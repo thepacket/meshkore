@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -60,6 +62,7 @@ import org.thepacket.meshcore.app.ChatMessage
 import org.thepacket.meshcore.app.HeardEntry
 import org.thepacket.meshcore.app.MsgStatus
 import org.thepacket.meshcore.app.RepeaterLogin
+import org.thepacket.meshcore.app.regionLabel
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.SelfInfo
 import org.thepacket.meshcore.protocol.toHex
@@ -205,6 +208,7 @@ fun ConversationScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MessageBubble(
     m: ChatMessage,
@@ -231,12 +235,14 @@ private fun MessageBubble(
                     fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
             }
             MessageText(m.text)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(messageTime(m.timestampSecs), style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                if (m.incoming && m.snrDb != null) {
-                    Text("SNR ${m.snrDb} dB", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val meta = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                Text(messageTime(m.timestampSecs), style = MaterialTheme.typography.labelSmall, color = meta)
+                if (m.incoming) {
+                    // Observed-channel metadata from the relaying node's packet (SNR/RSSI/region).
+                    if (m.snrDb != null) Text("SNR ${m.snrDb} dB", style = MaterialTheme.typography.labelSmall, color = meta)
+                    if (m.rssi != null) Text("RSSI ${m.rssi}", style = MaterialTheme.typography.labelSmall, color = meta)
+                    if (m.region != null) Text(regionLabel(m.region), style = MaterialTheme.typography.labelSmall, color = meta)
                 }
                 if (!m.incoming) {
                     val (label, color) = statusLabel(m.status)
@@ -393,7 +399,7 @@ private fun statusLabel(s: MsgStatus): Pair<String, Color> = when (s) {
 private fun ObservingNote() {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
         Text(
-            "Observing over MQTT — read-only. Your radio isn't in this region.",
+            "Observing over MQTT. Your radio isn't in this region.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),

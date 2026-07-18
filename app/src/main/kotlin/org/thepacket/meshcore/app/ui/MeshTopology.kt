@@ -47,7 +47,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.thepacket.meshcore.app.MeshSession
 import org.thepacket.meshcore.protocol.Contact
 import org.thepacket.meshcore.protocol.ContactType
-import org.thepacket.meshcore.protocol.PacketInspector
 import org.thepacket.meshcore.protocol.RxLog
 import org.thepacket.meshcore.protocol.SelfInfo
 import kotlin.math.cos
@@ -101,7 +100,7 @@ fun buildTopology(
     val chains = ArrayList<Pair<String?, List<Int>>>()
     packets.forEachIndexed { idx, pkt ->
         if (idx >= edgeLimit) return@forEachIndexed
-        val p = PacketInspector.parse(pkt.raw)
+        val p = pkt.parsed
         if (p.pathHashes.isEmpty()) return@forEachIndexed
         val src = p.advertPubKey?.takeIf { it.isNotEmpty() }?.let { it[0].toInt() and 0xFF } ?: p.srcHash
         chains.add(pkt.region to buildList { src?.let { add(it) }; addAll(p.pathHashes) })
