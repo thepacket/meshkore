@@ -212,24 +212,6 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         // ---- Region (global: MQTT subscription + device push scope) ----
         RegionCard(ctx, session)
 
-        // ---- Global Contacts (the aggregate address book) ----
-        SectionCard("Global Contacts") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ToolButton("Export", modifier = Modifier.weight(1f)) { exportGlobalContacts.launch("meshcore-global-contacts.json") }
-                ToolButton("Import", modifier = Modifier.weight(1f)) { importGlobalContacts.launch(arrayOf("application/json")) }
-                ToolButton("Delete", danger = true, modifier = Modifier.weight(1f)) { showClearGlobal = true }
-            }
-        }
-
-        // ---- Device contacts ----
-        SectionCard("Device contacts") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ToolButton("Export", modifier = Modifier.weight(1f)) { exportDeviceContacts.launch("meshcore-device-contacts.json") }
-                ToolButton("Import", modifier = Modifier.weight(1f)) { importDeviceContacts.launch(arrayOf("application/json")) }
-                ToolButton("Delete", danger = true, modifier = Modifier.weight(1f)) { showClearDevice = true }
-            }
-        }
-
         // ---- Identity ----
         var name by remember(self) { mutableStateOf(self.name) }
         SectionCard("Identity") {
@@ -363,30 +345,13 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
         var aaSensor by remember(autoAdd) { mutableStateOf(((autoAdd?.flags ?: 0) and AutoAdd.SENSOR) != 0) }
         var aaOverwrite by remember(autoAdd) { mutableStateOf(((autoAdd?.flags ?: 0) and AutoAdd.OVERWRITE_OLDEST) != 0) }
         var maxHops by remember(autoAdd) { mutableStateOf((autoAdd?.maxHops ?: 0).toString()) }
-        SectionCard("Auto-add contacts") {
+        SectionCard("Auto-add device contacts") {
             SwitchRow("Chat nodes", aaChat) { aaChat = it }
             SwitchRow("Repeaters", aaRep) { aaRep = it }
             SwitchRow("Rooms", aaRoom) { aaRoom = it }
             SwitchRow("Sensors", aaSensor) { aaSensor = it }
             SwitchRow("Overwrite oldest when full", aaOverwrite) { aaOverwrite = it }
             Field("Max hops (0 = unlimited)", maxHops) { maxHops = it }
-        }
-
-        // ---- Contacts pushed to device (app-local; the observed book collects everything) ----
-        val pushTypes by session.pushTypes.collectAsStateWithLifecycle()
-        SectionCard("Contacts pushed to device") {
-            Text(
-                "The address book collects every observed node (companion + MQTT). Only the selected " +
-                    "types are added to the connected device by \"Send to device\".",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            )
-            fun setType(type: Int, on: Boolean) =
-                session.setPushTypes(if (on) pushTypes + type else pushTypes - type)
-            SwitchRow("Chat nodes", ContactType.CHAT in pushTypes) { setType(ContactType.CHAT, it) }
-            SwitchRow("Repeaters", ContactType.REPEATER in pushTypes) { setType(ContactType.REPEATER, it) }
-            SwitchRow("Rooms", ContactType.ROOM in pushTypes) { setType(ContactType.ROOM, it) }
-            SwitchRow("Sensors", ContactType.SENSOR in pushTypes) { setType(ContactType.SENSOR, it) }
         }
 
         // ---- Tuning ----
@@ -550,6 +515,22 @@ fun SettingsContent(session: MeshSession, self: SelfInfo?, modifier: Modifier = 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { session.refreshDeviceTime() }) { Text("Refresh") }
                 Button(onClick = { session.syncTimeFromPhone() }) { Text("Sync now") }
+            }
+        }
+
+        // ---- Contact books (kept at the bottom) ----
+        SectionCard("Global Contacts") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ToolButton("Export", modifier = Modifier.weight(1f)) { exportGlobalContacts.launch("meshcore-global-contacts.json") }
+                ToolButton("Import", modifier = Modifier.weight(1f)) { importGlobalContacts.launch(arrayOf("application/json")) }
+                ToolButton("Delete", danger = true, modifier = Modifier.weight(1f)) { showClearGlobal = true }
+            }
+        }
+        SectionCard("Device contacts") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ToolButton("Export", modifier = Modifier.weight(1f)) { exportDeviceContacts.launch("meshcore-device-contacts.json") }
+                ToolButton("Import", modifier = Modifier.weight(1f)) { importDeviceContacts.launch(arrayOf("application/json")) }
+                ToolButton("Delete", danger = true, modifier = Modifier.weight(1f)) { showClearDevice = true }
             }
         }
 
@@ -773,7 +754,7 @@ private fun MqttCard(ctx: Context) {
         Field("Username", user) { user = it }
         OutlinedTextField(
             value = pass, onValueChange = { pass = it },
-            label = { Text("Password / token") },
+            label = { Text("Password / token", style = MaterialTheme.typography.bodyLarge) },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true, modifier = Modifier.fillMaxWidth(),
         )
@@ -911,7 +892,8 @@ private fun CustomVarRow(name: String, value: String, onSave: (String) -> Unit) 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         OutlinedTextField(
-            value = text, onValueChange = { text = it }, label = { Text(name) },
+            value = text, onValueChange = { text = it },
+            label = { Text(name, style = MaterialTheme.typography.bodyLarge) },
             singleLine = true, modifier = Modifier.weight(1f),
         )
         Button(onClick = { onSave(text) }, enabled = text != value) { Text("Save") }
@@ -921,7 +903,8 @@ private fun CustomVarRow(name: String, value: String, onSave: (String) -> Unit) 
 @Composable
 private fun Field(label: String, value: String, onValue: (String) -> Unit) {
     OutlinedTextField(
-        value = value, onValueChange = onValue, label = { Text(label) },
+        value = value, onValueChange = onValue,
+        label = { Text(label, style = MaterialTheme.typography.bodyLarge) },
         singleLine = true, modifier = Modifier.fillMaxWidth(),
     )
 }
@@ -948,7 +931,7 @@ private fun EnumDropdown(label: String, options: List<String>, index: Int, onInd
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
             value = options[index.coerceIn(options.indices)], onValueChange = {}, readOnly = true,
-            label = { Text(label) },
+            label = { Text(label, style = MaterialTheme.typography.bodyLarge) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
