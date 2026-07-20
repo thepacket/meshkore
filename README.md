@@ -1,5 +1,7 @@
 # MeshKore
 
+## This project is in development. Not usable at this time. ##
+
 An open-source (**MIT**) Android client for [MeshCore](https://github.com/meshcore-dev/MeshCore)
 devices over **BLE** — an alternative to the official app, built natively in
 **Kotlin + Jetpack Compose**.
